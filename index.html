@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f7f6">
+    <title>手语辅助沟通平台</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="./" aria-label="手语辅助沟通平台首页">
+          <span class="brand-mark" aria-hidden="true">手</span>
+          <span><strong>轻语</strong><small>手语辅助沟通平台</small></span>
+        </a>
+        <div class="side-label">工作区</div>
+        <nav class="nav-list" aria-label="工作区">
+          <button class="nav-item active" data-mode="recognize"><span class="nav-icon">◎</span><span>手语识别</span><kbd>01</kbd></button>
+          <button class="nav-item" data-mode="video"><span class="nav-icon">▷</span><span>查手语视频</span><kbd>02</kbd></button>
+          <button class="nav-item" data-mode="knowledge"><span class="nav-icon">⌕</span><span>问手语知识</span><kbd>03</kbd></button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="privacy-note"><span class="privacy-dot"></span><span>隐私优先<small>摄像头仅在你允许后开启</small></span></div>
+          <div class="version">原型预览 <span>0.1.0</span></div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="mobile-brand"><span class="brand-mark">手</span><strong>轻语</strong></div>
+          <div class="breadcrumb">工作区 <span>/</span> <strong id="breadcrumb-current">手语识别</strong></div>
+          <div class="topbar-status"><i></i>本地演示模式</div>
+        </header>
+
+        <div class="page-wrap">
+          <section class="page-heading">
+            <div>
+              <p class="eyebrow">校园沟通工具 <span class="eyebrow-line"></span> 限定词表</p>
+              <h1 id="page-title">手语识别</h1>
+              <p class="page-description" id="page-description">限定词表仅覆盖十个训练词，摄像头特征在本地提取。</p>
+            </div>
+            <div class="scope-chip"><span></span>仅覆盖已审核词条</div>
+          </section>
+
+          <section class="workspace" id="recognize-panel">
+            <div class="camera-column">
+              <div class="camera-frame" id="camera-frame">
+                <video id="camera-video" autoplay playsinline muted></video>
+                <canvas id="hand-overlay" aria-hidden="true"></canvas>
+                <div class="camera-placeholder" id="camera-placeholder">
+                  <div class="camera-symbol"><span></span></div>
+                  <strong id="camera-title">摄像头尚未开启</strong>
+                  <p id="camera-copy">允许摄像头访问后，在本地提取双手关键点并识别。</p>
+                  <button class="button button-primary" id="camera-start"><span aria-hidden="true">◎</span> 开启摄像头</button>
+                </div>
+                <div class="camera-top-label"><span class="live-dot"></span><span id="camera-state">预览未启动</span></div>
+                <div class="camera-corner camera-corner-tl"></div><div class="camera-corner camera-corner-tr"></div>
+                <div class="camera-corner camera-corner-bl"></div><div class="camera-corner camera-corner-br"></div>
+              </div>
+              <div class="camera-foot">
+                <span><i class="small-dot"></i>画面本地处理，特征发送至本机 API</span>
+                <button class="text-button" id="camera-stop" disabled>关闭摄像头</button>
+              </div>
+            </div>
+            <div class="result-column">
+              <div class="section-kicker">识别结果 <span class="kicker-rule"></span></div>
+              <div class="model-status">
+                <div class="status-icon">!</div>
+                <div><strong id="model-status-title">正在检查模型与 API</strong><p id="model-status-copy">手部关键点在浏览器本地提取。</p></div>
+              </div>
+              <div class="result-empty">
+                <div class="waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                <strong id="recognition-result">暂未识别，请重试</strong>
+                <p id="recognition-note">打开摄像头后开始检测双手。</p>
+              </div>
+              <div class="pipeline">
+                <div class="section-kicker">识别流程 <span class="kicker-rule"></span></div>
+                <div class="pipeline-row"><span class="step-number">01</span><span>摄像头与双手关键点</span><b class="step-state" id="pipeline-hands">等待开启</b></div>
+                <div class="pipeline-row"><span class="step-number">02</span><span>60 帧时序缓存与模型推理</span><b class="step-state" id="pipeline-inference">等待开启</b></div>
+                <div class="pipeline-row"><span class="step-number">03</span><span>置信度判断与文字播报</span><b class="step-state" id="pipeline-result">等待结果</b></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="workspace lookup-workspace hidden" id="lookup-panel">
+            <div class="lookup-main">
+              <div class="mode-switch" role="group" aria-label="查询模式">
+                <button class="mode-button active" data-mode="video">查手语视频</button>
+                <button class="mode-button" data-mode="knowledge">问手语知识</button>
+              </div>
+              <form id="query-form" class="query-form">
+                <label class="sr-only" for="query-input">输入词语或问题</label>
+                <span class="search-icon" aria-hidden="true">⌕</span>
+                <input id="query-input" type="text" placeholder="输入一个词语，例如：谢谢" autocomplete="off">
+                <button type="button" class="mic-button" id="mic-button" aria-label="语音输入" title="语音输入">●</button>
+                <button type="submit" class="button button-primary query-submit">查询 <span aria-hidden="true">→</span></button>
+              </form>
+              <div class="query-hint" id="query-hint">语音会先转成可编辑文字，再由你确认查询。</div>
+              <div id="query-feedback" class="query-feedback" role="status" aria-live="polite"></div>
+              <div class="result-heading"><div class="section-kicker" id="result-label">词条匹配</div><span class="demo-tag">本地演示数据</span></div>
+              <div id="lookup-result" class="lookup-result">
+                <div class="lookup-empty"><span class="empty-search">⌕</span><strong>输入词语开始查询</strong><p>输入词语或句子，查看已审核的文字说明和示范视频。</p></div>
+              </div>
+              <div class="candidate-section">
+                <div class="candidate-heading"><span>候选词条</span><small>点击填入查询</small></div>
+                <div class="term-list" id="term-list"></div>
+              </div>
+            </div>
+            <aside class="lookup-aside">
+              <div class="aside-heading"><span class="aside-mark">i</span><span id="aside-title">词条状态</span></div>
+              <p id="aside-copy">词条说明和视频来自本地已审核资料；未收录内容会明确提示。</p>
+              <div class="aside-divider"></div>
+              <div class="aside-stat"><span>候选词条</span><strong id="term-count">10</strong></div>
+              <div class="aside-stat"><span>已审核</span><strong class="muted-stat">0</strong></div>
+              <div class="aside-stat"><span>可播放视频</span><strong class="muted-stat">0</strong></div>
+              <div class="aside-note"><span aria-hidden="true">↗</span>视频和词条数据由 data/sign-entries.json 统一管理。</div>
+            </aside>
+          </section>
+
+          <footer class="page-footer"><span>轻语 · 手语辅助沟通平台</span><span>限定词表原型 <i></i> 不构成完整手语翻译</span></footer>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

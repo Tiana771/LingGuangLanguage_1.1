@@ -1,0 +1,22 @@
+# Python 虚拟环境
+.venv/
+__pycache__/
+
+# 依赖包（极其重要，千万别传）
+node_modules/
+
+# 你的数据文件夹和输出（视情况忽略）
+sign_data/
+sign_data_a/
+sign_data_b/
+data/
+data_1/
+old_sign_data/
+old_sign_data_a/
+old_sign_data_b/
+model_output/
+
+# 日志和缓存文件
+debug.log
+*.log
+.DS_Store

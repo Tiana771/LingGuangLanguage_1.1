@@ -1,0 +1,9 @@
+{
+  "name": "lingguang-sign-language-camera",
+  "private": true,
+  "type": "module",
+  "description": "Local browser hand landmark runtime for the sign recognition demo",
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.1"
+  }
+}
