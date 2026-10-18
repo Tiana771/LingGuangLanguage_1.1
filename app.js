@@ -1,5 +1,6 @@
 import { FRAME_COUNT, frameFeatures, taskHandednessToTrainingLabel, validFrameCount } from "./camera_features.mjs";
 import { PredictionSmoother } from "./prediction_smoother.mjs";
+import { RecognitionSession } from "./recognition_session.mjs";
 
 const modes = {
   recognize: { title: "手语识别", description: "限定词表仅覆盖十个训练词；摄像头特征在本地提取。" },
@@ -35,9 +36,11 @@ let cameraSession = 0;
 let predictionGeneration = 0;
 let frameBuffer = [];
 let stableLabel = null;
+let noHandWindowCleared = false;
 let activePredictionController = null;
 let lastRecognitionRenderAt = 0;
 const predictionSmoother = new PredictionSmoother({ windowSize: 3, majority: 2, lockMs: 1500 });
+const recognitionSession = new RecognitionSession({ noHandResetMs: 500, maxHistory: 30 });
 const CAMERA_FRAME_INTERVAL_MS = 40;
 const PREDICTION_INTERVAL_MS = 500;
 let MIN_VALID_HAND_FRAMES = null;
@@ -114,16 +117,47 @@ async function checkModel() {
   }
 }
 
-function setRecognition(title, note, pipelineState = "") {
+function setRecognition(note, pipelineState = "") {
   const now = performance.now();
-  // Buffer counters change every camera frame. Limit only that status so the
-  // result area remains readable while accepted/rejected results stay instant.
-  const transient = ["正在收集动作", "暂未识别，请重试"].includes(title);
+  const transient = /收集动作窗口|未检测到手|动作不清晰|有效手部帧不足/.test(note);
   if (transient && now - lastRecognitionRenderAt < 600) return;
   lastRecognitionRenderAt = now;
-  document.querySelector("#recognition-result").textContent = title;
   document.querySelector("#recognition-note").textContent = note;
   if (pipelineState) document.querySelector("#pipeline-result").textContent = pipelineState;
+}
+
+function setRecognitionResult(label) {
+  const resultElement = document.querySelector("#recognition-result");
+  const panel = document.querySelector(".result-empty");
+  resultElement.textContent = label;
+  panel.classList.toggle("is-recognized", Boolean(label) && label !== "暂未识别，请重试");
+}
+
+function renderRecognitionHistory() {
+  const list = document.querySelector("#recognition-history-list");
+  const items = recognitionSession.history;
+  list.replaceChildren();
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "history-empty";
+    empty.textContent = "本轮还没有识别结果";
+    list.append(empty);
+  } else {
+    items.forEach(({ label }, index) => {
+      const item = document.createElement("li");
+      item.className = "history-item";
+      const number = document.createElement("span");
+      number.className = "history-index";
+      number.textContent = String(index + 1).padStart(2, "0");
+      const word = document.createElement("strong");
+      word.textContent = label;
+      item.append(number, word);
+      list.append(item);
+    });
+    list.scrollTop = list.scrollHeight;
+  }
+  document.querySelector("#history-undo").disabled = items.length === 0;
+  document.querySelector("#history-clear").disabled = items.length === 0;
 }
 
 async function createHandLandmarker() {
@@ -186,17 +220,19 @@ function drawHands(result) {
 
 function votePrediction(payload) {
   const outcome = predictionSmoother.push(payload);
-  stableLabel = outcome.label;
   if (outcome.label) {
+    stableLabel = outcome.label;
+    setRecognitionResult(outcome.label);
+    if (outcome.changed && recognitionSession.recordAccepted({ accepted: true, label: outcome.label }, Date.now())) renderRecognitionHistory();
     const note = outcome.changed
-      ? `连续 3 个预测窗口中至少 2 次一致 · 置信度 ${(payload.confidence * 100).toFixed(1)}%`
-      : outcome.locked ? "已识别结果保持显示" : "稳定识别";
-    setRecognition(outcome.label, note, outcome.locked ? "结果锁定 1.5 秒" : "稳定");
+      ? `已确认 · 置信度 ${(payload.confidence * 100).toFixed(1)}%`
+      : outcome.locked ? "识别结果已保留" : "稳定识别";
+    setRecognition(note, outcome.locked ? "结果锁定 1.5 秒" : "稳定");
   } else if (payload.accepted) {
-    setRecognition("正在确认动作", "等待最近 3 个预测窗口中至少 2 次一致", "确认中");
+    setRecognition("动作已检测，正在确认结果", "确认中");
   } else {
     const lowFrames = Number(payload.valid_frame_count) < MIN_VALID_HAND_FRAMES;
-    setRecognition("暂未识别，请重试", lowFrames ? "请将双手完整放入框内" : "动作不清晰，暂未识别", lowFrames ? "质量不足" : "拒识");
+    setRecognition(lowFrames ? "请将当前动作需要的手完整放入画面" : "动作不清晰，没看清请重试", lowFrames ? "质量不足" : "拒识");
   }
 }
 
@@ -229,9 +265,8 @@ async function requestWindowPrediction(sequence, session, generation) {
     }
   } catch (error) {
     if (session === cameraSession && generation === predictionGeneration && (error.name !== "AbortError" || timedOut)) {
-      stableLabel = null;
       predictionSmoother.reset();
-      setRecognition("识别服务不可用", timedOut ? "预测请求超时，请检查本地服务" : error.message, "连接错误");
+      setRecognition(timedOut ? "预测请求超时，请检查本地服务" : `识别服务暂不可用：${error.message}`, "连接错误");
     }
   } finally {
     window.clearTimeout(timeoutId);
@@ -259,27 +294,33 @@ function processCameraFrame(now) {
       score: result.handedness?.[index]?.[0]?.score,
     }));
     const frame = frameFeatures(detections);
-    frameBuffer.push(frame.features);
-    if (frameBuffer.length > FRAME_COUNT) frameBuffer.shift();
-    const validFrames = validFrameCount(frameBuffer);
 
     if (frame.handCount === 0) {
       predictionGeneration += 1;
       activePredictionController?.abort();
-      // Keep a just-confirmed label visible during the smoother's 1.5s lock.
-      // A transient missed frame must not erase an otherwise stable result.
-      if (stableLabel && !predictionSmoother.isLocked()) {
+      const segmentEnded = recognitionSession.observeNoHands(now);
+      if (segmentEnded) {
+        frameBuffer = [];
         stableLabel = null;
         predictionSmoother.reset();
+        noHandWindowCleared = true;
+      } else if (!noHandWindowCleared) {
+        frameBuffer.push(frame.features);
+        if (frameBuffer.length > FRAME_COUNT) frameBuffer.shift();
       }
-      if (!stableLabel) setRecognition("暂未识别，请重试", "未检测到手", "无手");
-      document.querySelector("#camera-state").textContent = "未检测到手";
+      setRecognition(segmentEnded ? "手已放下，结果已保留；可以开始下一个动作" : "未检测到手，已保留最近结果", "等待下一动作");
+      document.querySelector("#camera-state").textContent = segmentEnded ? "等待下一动作" : "未检测到手";
       return;
     }
+    recognitionSession.observeHands();
+    noHandWindowCleared = false;
+    frameBuffer.push(frame.features);
+    if (frameBuffer.length > FRAME_COUNT) frameBuffer.shift();
+    const validFrames = validFrameCount(frameBuffer);
     document.querySelector("#camera-state").textContent = `已检测到${frame.handCount}只手`;
     document.querySelector("#pipeline-hands").textContent = "运行中";
     if (frameBuffer.length < FRAME_COUNT) {
-      setRecognition("正在收集动作", `时序窗口 ${frameBuffer.length}/${FRAME_COUNT} 帧`, "缓冲中");
+      setRecognition(`正在收集动作窗口 ${frameBuffer.length}/${FRAME_COUNT} 帧`, "缓冲中");
       document.querySelector("#pipeline-inference").textContent = "缓冲中";
       return;
     }
@@ -287,13 +328,9 @@ function processCameraFrame(now) {
       predictionGeneration += 1;
       activePredictionController?.abort();
       if (stableLabel && predictionSmoother.isLocked()) {
-        setRecognition(stableLabel, "已识别结果保持显示", "结果锁定 1.5 秒");
+        setRecognition("识别结果已保留", "结果锁定 1.5 秒");
       } else {
-        if (stableLabel) {
-          stableLabel = null;
-          predictionSmoother.reset();
-        }
-        setRecognition("暂未识别，请重试", "请将双手完整放入框内", "质量不足");
+        setRecognition("请将当前动作需要的手完整放入画面", "质量不足");
       }
       return;
     }
@@ -303,7 +340,7 @@ function processCameraFrame(now) {
       requestWindowPrediction(frameBuffer.slice(), session, predictionGeneration);
     }
   } catch (error) {
-    setRecognition("手部特征提取失败", error.message, "特征错误");
+    setRecognition(`手部特征提取失败：${error.message}`, "特征错误");
   }
 }
 
@@ -437,6 +474,14 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
   const startButton = document.querySelector("#camera-start");
   startButton.disabled = true;
   const session = cameraSession + 1;
+  recognitionSession.resetRound();
+  renderRecognitionHistory();
+  setRecognitionResult("暂未识别，请重试");
+  stableLabel = null;
+  frameBuffer = [];
+  noHandWindowCleared = false;
+  predictionSmoother.reset();
+  setRecognition("正在启动识别组件", "初始化中");
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
     const healthResponse = await fetch(`${API_BASE}/api/health`);
@@ -459,7 +504,7 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
     document.querySelector("#camera-frame").classList.add("is-live");
     document.querySelector("#camera-stop").disabled = false;
     document.querySelector("#camera-state").textContent = "正在加载本地识别模型";
-    setRecognition("正在启动手部识别", "正在加载本地 Hand Landmarker 模型", "初始化中");
+    setRecognition("正在加载本地手部识别模型", "初始化中");
     document.querySelector("#pipeline-hands").textContent = "加载中";
     const landmarker = await createHandLandmarker();
     if (session !== cameraSession || !cameraStream) {
@@ -489,12 +534,21 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
       ? "当前环境不支持摄像头访问；可改用 localhost 或 HTTPS。"
       : error.message;
     document.querySelector("#camera-state").textContent = error.name === "NotAllowedError" ? "权限未允许" : "启动失败";
+    setRecognition(error.name === "NotAllowedError" ? "请允许浏览器使用摄像头" : `启动失败：${error.message}`, "启动失败");
   } finally {
     startButton.disabled = false;
   }
 });
 
 document.querySelector("#camera-stop").addEventListener("click", stopCamera);
+document.querySelector("#history-undo").addEventListener("click", () => {
+  recognitionSession.undo();
+  renderRecognitionHistory();
+});
+document.querySelector("#history-clear").addEventListener("click", () => {
+  recognitionSession.clear();
+  renderRecognitionHistory();
+});
 function stopCamera() {
   cameraSession += 1;
   predictionGeneration += 1;
@@ -514,10 +568,14 @@ function stopCamera() {
   document.querySelector("#camera-title").textContent = "摄像头尚未开启";
   document.querySelector("#camera-copy").textContent = "允许摄像头访问后，在本地提取双手关键点并识别。";
   frameBuffer = [];
+  noHandWindowCleared = false;
   predictionSmoother.reset();
   stableLabel = null;
+  recognitionSession.resetRound();
+  renderRecognitionHistory();
   predictionInFlight = false;
-  setRecognition("暂未识别，请重试", "摄像头已关闭", "已关闭");
+  setRecognitionResult("暂未识别，请重试");
+  setRecognition("摄像头已关闭；再次开启将开始新一轮", "已关闭");
   document.querySelector("#pipeline-hands").textContent = "等待开启";
   document.querySelector("#pipeline-inference").textContent = "等待开启";
 }

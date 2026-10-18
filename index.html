@@ -74,6 +74,27 @@
                 <strong id="recognition-result">暂未识别，请重试</strong>
                 <p id="recognition-note">打开摄像头后开始检测双手。</p>
               </div>
+              <section class="recognition-history" aria-labelledby="history-title">
+                <div class="history-heading">
+                  <div class="section-kicker" id="history-title">本轮识别记录 <span class="kicker-rule"></span></div>
+                  <div class="history-actions">
+                    <button class="text-button" id="history-undo" type="button" disabled>撤销上一个</button>
+                    <button class="text-button" id="history-clear" type="button" disabled>清空</button>
+                  </div>
+                </div>
+                <p class="history-caption">仅记录稳定识别的词语，不自动翻译成完整句子。</p>
+                <ol id="recognition-history-list" class="history-list" aria-live="polite">
+                  <li class="history-empty">本轮还没有识别结果</li>
+                </ol>
+              </section>
+              <section class="sign-guidance" aria-labelledby="guidance-title">
+                <div class="section-kicker" id="guidance-title">动作提示 <span class="kicker-rule"></span></div>
+                <ul>
+                  <li>按当前词语需要的手势完成动作，不要求所有词都使用双手。</li>
+                  <li>动作自然、完整，稍慢一些并保持在画面内。</li>
+                  <li>保证光线充足，避免手部被遮挡或快速出框。</li>
+                </ul>
+              </section>
               <div class="pipeline">
                 <div class="section-kicker">识别流程 <span class="kicker-rule"></span></div>
                 <div class="pipeline-row"><span class="step-number">01</span><span>摄像头与双手关键点</span><b class="step-state" id="pipeline-hands">等待开启</b></div>
