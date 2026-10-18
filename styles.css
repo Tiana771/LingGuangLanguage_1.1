@@ -42,7 +42,6 @@ h1{font-size:26px;line-height:1.25;margin:0;font-weight:600;letter-spacing:0}
 .camera-frame{position:relative;background:#e7ece9;aspect-ratio:1.36;min-height:290px;display:grid;place-items:center;overflow:hidden;border-radius:4px}
 .camera-frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:none}
 .camera-frame canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;z-index:1}
-.camera-frame.is-live canvas{transform:scaleX(-1)}
 .camera-frame.is-live video{display:block}
 .camera-frame.is-live{background:#1b2724}
 .camera-placeholder{position:relative;z-index:1;text-align:center;display:flex;flex-direction:column;align-items:center;padding:24px}

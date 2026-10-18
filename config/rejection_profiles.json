@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "default_mode": "calibrated",
+  "profiles": {
+    "calibrated": {
+      "confidence_threshold": 0.78,
+      "description": "拒识校准候选配置；校准数据仅包含已知 10 类",
+      "calibrated": true
+    },
+    "demo": {
+      "confidence_threshold": 0.6,
+      "description": "现场降级选项，未经同等校准",
+      "calibrated": false
+    }
+  },
+  "quality_gate": "Q0_any15",
+  "min_selected_frames": 15,
+  "top2_margin_threshold": 0.0,
+  "feature_mode": "B",
+  "model_path": "../model_output/phase2_train-20261017-214741/final_demo_model.joblib",
+  "calibration_source": "../model_output/rejection_calibration-20261017-224000/frozen_rejection_config.json",
+  "limitations": "没有专门无手、静止、背景或词表外负样本，真实负样本拒识未验证。"
+}

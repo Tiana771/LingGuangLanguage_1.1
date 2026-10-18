@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from serve_sign_api import create_app
-from sign_baseline import parse_label, predict_sequence, scan_dataset, sequence_features
+from sign_baseline import parse_label, pooled_sequence_features, predict_sequence, scan_dataset, sequence_features
 
 
 class BaselineTests(unittest.TestCase):
@@ -61,6 +61,116 @@ class BaselineTests(unittest.TestCase):
         self.assertFalse(result["accepted"])
         self.assertIsNone(result["label"])
         self.assertAlmostEqual(result["confidence"], 0.3)
+
+    def test_probability_columns_follow_classifier_classes_order(self):
+        class ReorderedModel:
+            classes_ = np.asarray(["乙", "甲"])
+
+            def predict(self, _features):
+                return np.asarray(["甲"])
+
+            def predict_proba(self, _features):
+                return np.asarray([[0.2, 0.8]])
+
+        bundle = {"model": ReorderedModel(), "labels": ["甲", "乙"]}
+        result = predict_sequence(np.zeros((60, 126)), bundle, threshold=0.75)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["label"], "甲")
+        self.assertAlmostEqual(result["confidence"], 0.8)
+
+    def test_scheme_b_uses_calibration_top_probability_class(self):
+        class ReorderedModel:
+            classes_ = np.asarray(["谢谢", "你好"])
+
+            def predict(self, _features):
+                return np.asarray(["你好"])
+
+            def predict_proba(self, _features):
+                return np.asarray([[0.82, 0.18]])
+
+        sequence = np.zeros((60, 126), dtype=np.float32)
+        sequence[:15, 3] = 1
+        bundle = {"model": ReorderedModel(), "labels": ["你好", "谢谢"],
+                  "feature_config": {"mode": "B", "min_selected_frames": 15}}
+        result = predict_sequence(sequence, bundle, threshold=0.78)
+        self.assertEqual(result["candidate_label"], "谢谢")
+        self.assertEqual(result["label"], "谢谢")
+        self.assertAlmostEqual(result["confidence"], 0.82)
+
+    def test_scheme_b_features_and_low_valid_frame_rejection(self):
+        class FixedModel:
+            classes_ = np.asarray(["你好", "谢谢"])
+
+            def predict(self, _features):
+                return np.asarray(["你好"])
+
+            def predict_proba(self, _features):
+                return np.asarray([[0.9, 0.1]])
+
+        sequence = np.zeros((60, 126), dtype=np.float32)
+        sequence[:15, 4] = np.arange(1, 16)
+        features = pooled_sequence_features(sequence, min_selected_frames=15)
+        self.assertEqual(features.shape, (252,))
+        bundle = {"model": FixedModel(), "labels": ["你好", "谢谢"],
+                  "feature_config": {"mode": "B", "min_selected_frames": 15, "model_feature_dimension": 252}}
+        accepted = predict_sequence(sequence, bundle, threshold=0.78)
+        self.assertTrue(accepted["accepted"])
+        self.assertEqual(accepted["label"], "你好")
+        sequence[14] = 0
+        rejected = predict_sequence(sequence, bundle, threshold=0.78)
+        self.assertFalse(rejected["accepted"])
+        self.assertIsNone(rejected["label"])
+        self.assertEqual(rejected["candidate_label"], None)
+        self.assertEqual(rejected["valid_frame_count"], 14)
+
+    def test_b_model_bundle_round_trip_and_configured_health(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model = make_pipeline(StandardScaler(), SVC(probability=True, random_state=42))
+            x = np.vstack([np.zeros((5, 252)), np.ones((5, 252))]).astype(np.float32)
+            y = np.asarray(["你好"] * 5 + ["谢谢"] * 5)
+            model.fit(x, y)
+            model_path = Path(temp) / "b-model.joblib"
+            joblib.dump({"model": model, "labels": ["你好", "谢谢"],
+                         "feature_config": {"mode": "B", "input_shape": [60, 126],
+                                            "model_feature_dimension": 252, "min_selected_frames": 30}}, model_path)
+            reloaded = joblib.load(model_path)
+            self.assertEqual(reloaded["feature_config"]["model_feature_dimension"], 252)
+            client = create_app(model_path=model_path, threshold=0.78).test_client()
+            health = client.get("/api/health").get_json()
+            self.assertEqual(health["feature_mode"], "B")
+            self.assertEqual(health["min_selected_frames"], 15)
+            self.assertEqual(health["confidence_threshold"], 0.78)
+            self.assertEqual(health["rejection_mode"], "calibrated")
+            low_quality = np.zeros((60, 126), dtype=float)
+            low_quality[:14, 2] = 1
+            rejected = client.post("/api/predict", json={"sequence": low_quality.tolist()}).get_json()
+            self.assertFalse(rejected["accepted"])
+            self.assertIsNone(rejected["label"])
+            self.assertIsNone(rejected["candidate_label"])
+            self.assertEqual(rejected["message"], "暂未识别，请重试")
+            good_quality = np.zeros((60, 126), dtype=float)
+            good_quality[:30, 2] = 1
+            permissive_client = create_app(model_path=model_path, threshold=0.0).test_client()
+            accepted = permissive_client.post("/api/predict", json={"sequence": good_quality.tolist()}).get_json()
+            self.assertTrue(accepted["accepted"])
+            self.assertIn(accepted["label"], {"你好", "谢谢"})
+            strict_client = create_app(model_path=model_path, threshold=1.0).test_client()
+            low_confidence = strict_client.post("/api/predict", json={"sequence": good_quality.tolist()}).get_json()
+            self.assertFalse(low_confidence["accepted"])
+            self.assertIsNone(low_confidence["label"])
+            self.assertEqual(low_confidence["message"], "暂未识别，请重试")
+
+    def test_rejection_config_profiles_and_invalid_config(self):
+        client = create_app(rejection_mode="demo").test_client()
+        health = client.get("/api/health").get_json()
+        self.assertEqual(health["rejection_mode"], "demo")
+        self.assertEqual(health["confidence_threshold"], 0.60)
+        self.assertIn("未经同等校准", health["rejection_mode_description"])
+        with tempfile.TemporaryDirectory() as temp:
+            invalid = Path(temp) / "invalid.json"
+            invalid.write_text('{"default_mode":"calibrated","profiles":{}}', encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                create_app(config_path=invalid)
 
     def test_api_model_not_ready_and_request_validation(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -115,7 +225,7 @@ class BaselineTests(unittest.TestCase):
                 self.assertGreater(len(response.data), 0)
                 response.close()
 
-    def test_term_api_uses_current_ten_labels_and_pending_video_state(self):
+    def test_term_api_uses_current_ten_labels_and_ready_videos(self):
         client = create_app().test_client()
         for path in ("/", "/app.js", "/styles.css"):
             page_response = client.get(path)
@@ -125,13 +235,17 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         terms = response.get_json()["terms"]
         self.assertEqual([item["term"] for item in terms], ["你好", "谢谢", "请问", "医院", "厕所", "欢迎", "帮助", "报警", "吃饭", "再见"])
-        self.assertTrue(all(item["status"] == "pending_material" for item in terms))
-        self.assertTrue(all(item["video_url"] is None for item in terms))
+        self.assertTrue(all(item["status"] == "ready" for item in terms))
+        self.assertTrue(all(item["video_url"].startswith("/videos/") for item in terms))
+        for item in terms:
+            response = client.get(item["video_url"])
+            self.assertEqual(response.status_code, 200)
+            response.close()
 
     def test_term_match_exact_confirmation_ambiguity_and_not_found(self):
         client = create_app().test_client()
         exact = client.post("/api/terms/match", json={"text": "谢谢"}).get_json()
-        self.assertEqual(exact["status"], "pending_material")
+        self.assertEqual(exact["status"], "ready")
         self.assertEqual(exact["match_status"], "matched")
         self.assertEqual(exact["term_data"]["term"], "谢谢")
 

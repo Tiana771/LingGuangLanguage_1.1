@@ -125,26 +125,70 @@ def validate_sequence(sequence: Any) -> np.ndarray:
     return array
 
 
-def predict_sequence(sequence: Any, bundle: dict[str, Any], threshold: float = 0.55) -> dict[str, Any]:
+def pooled_sequence_features(sequence: Any, min_selected_frames: int = 30) -> np.ndarray | None:
+    """Return scheme-B any-valid mean+std features, or None below the frame gate."""
+    array = validate_sequence(sequence)
+    left_on = np.max(np.abs(array[:, :63]), axis=1) > 1e-8
+    right_on = np.max(np.abs(array[:, 63:]), axis=1) > 1e-8
+    selected = left_on | right_on
+    if int(selected.sum()) < min_selected_frames:
+        return None
+    rows = array[selected].astype(np.float32)
+    return np.concatenate([rows.mean(axis=0), rows.std(axis=0)]).astype(np.float32)
+
+
+def predict_sequence(sequence: Any, bundle: dict[str, Any], threshold: float = 0.55,
+                     margin_threshold: float = 0.0,
+                     min_selected_frames: int | None = None) -> dict[str, Any]:
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("threshold must be between 0 and 1")
+    if margin_threshold < 0:
+        raise ValueError("margin_threshold must be non-negative")
     array = validate_sequence(sequence)
-    features = sequence_features(array).reshape(1, -1)
+    feature_config = bundle.get("feature_config", {})
+    mode = feature_config.get("mode")
+    selected_frames = None
+    if mode == "B":
+        left_on = np.max(np.abs(array[:, :63]), axis=1) > 1e-8
+        right_on = np.max(np.abs(array[:, 63:]), axis=1) > 1e-8
+        selected_frames = int((left_on | right_on).sum())
+        minimum = int(min_selected_frames if min_selected_frames is not None
+                      else feature_config.get("min_selected_frames", 30))
+        if minimum < 1:
+            raise ValueError("min_selected_frames must be positive")
+        if selected_frames < minimum:
+            return {
+                "status": "ok", "candidate_label": None, "label": None,
+                "confidence": 0.0, "accepted": False,
+                "message": "暂未识别，请重试", "valid_frame_count": selected_frames,
+            }
+        features = pooled_sequence_features(array, minimum).reshape(1, -1)
+    else:
+        features = sequence_features(array).reshape(1, -1)
     model = bundle["model"]
     probabilities = model.predict_proba(features)[0]
     predicted_label = model.predict(features)[0]
     try:
-        predicted_index = list(bundle["labels"]).index(predicted_label)
+        probability_labels = list(getattr(model, "classes_", bundle["labels"]))
+        if mode == "B":
+            predicted_index = int(np.argmax(probabilities))
+            predicted_label = probability_labels[predicted_index]
+        else:
+            predicted_index = probability_labels.index(predicted_label)
     except ValueError as exc:
         raise ValueError(f"model predicted an unknown label: {predicted_label}") from exc
     confidence = float(probabilities[predicted_index])
-    accepted = confidence >= threshold
+    sorted_probabilities = np.sort(np.asarray(probabilities, dtype=np.float64))
+    top2_margin = float(sorted_probabilities[-1] - sorted_probabilities[-2]) if len(sorted_probabilities) > 1 else 1.0
+    accepted = confidence >= threshold and top2_margin >= margin_threshold
     label = str(predicted_label) if accepted else None
     return {
         "status": "ok",
         "candidate_label": str(predicted_label),
         "label": label,
         "confidence": confidence,
+        "top2_margin": top2_margin,
         "accepted": accepted,
         "message": str(predicted_label) if accepted else "暂未识别，请重试",
+        **({"valid_frame_count": selected_frames} if selected_frames is not None else {}),
     }

@@ -13,6 +13,19 @@ from sign_features import pack_hands
 
 
 class CameraFeatureTests(unittest.TestCase):
+    def test_tasks_handedness_is_adapted_to_training_label_convention(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is not installed; handedness mapping check skipped")
+        module_url = Path(__file__).with_name("camera_features.mjs").as_uri()
+        js = (
+            f"import {{ taskHandednessToTrainingLabel }} from {json.dumps(module_url)}; "
+            "console.log(JSON.stringify(['Left','Right','Unknown'].map(taskHandednessToTrainingLabel)));"
+        )
+        completed = subprocess.run([node, "--input-type=module", "-e", js],
+                                   check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(completed.stdout), ["Right", "Left", "Unknown"])
+
     def test_python_and_browser_feature_packing_match(self):
         points_left = [
             {"x": 0.1 + i * 0.003, "y": 0.2 - i * 0.002, "z": -i * 0.001}

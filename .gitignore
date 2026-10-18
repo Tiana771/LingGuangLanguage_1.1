@@ -15,8 +15,11 @@ old_sign_data/
 old_sign_data_a/
 old_sign_data_b/
 model_output/
+*.npy
+*.mp4
 
 # 日志和缓存文件
 debug.log
 *.log
+debug_frames/
 .DS_Store
