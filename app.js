@@ -1,17 +1,24 @@
 import { FRAME_COUNT, frameFeatures, taskHandednessToTrainingLabel, validFrameCount } from "./camera_features.mjs";
 import { PredictionSmoother } from "./prediction_smoother.mjs";
 import { RecognitionSession } from "./recognition_session.mjs";
+import { initializeCommunication, stopCommunicationListening } from "./communication_assistant.mjs";
+import { initializeSpeechOutput } from "./speech_output.mjs";
+import { initializeAuth } from "./auth_client.mjs";
 
 const modes = {
   recognize: { title: "手语识别", description: "限定词表仅覆盖十个训练词；摄像头特征在本地提取。" },
   video: { title: "查手语视频", description: "输入词语查找对应的手语示范；尚未收录的表达会明确提示。" },
-  knowledge: { title: "问手语知识", description: "基于本地候选词条查询收录状态；未经审核的内容不会作为知识回答。" },
+  knowledge: { title: "问手语知识", description: "检索国家通用手语词典的已审核内容，展示原文、书中图片和出处。" },
+  communication: { title: "沟通助手", description: "实时查看口语转写，保存沟通记录，并按需整理重点或生成回复建议。" },
+  profile: { title: "个人中心", description: "管理个人资料、偏好设置和账号安全。" },
 };
 
 const navItems = [...document.querySelectorAll(".nav-item")];
 const modeButtons = [...document.querySelectorAll(".mode-button")];
 const recognizePanel = document.querySelector("#recognize-panel");
 const lookupPanel = document.querySelector("#lookup-panel");
+const communicationPanel = document.querySelector("#communication-panel");
+const profilePanel = document.querySelector("#profile-panel");
 const termList = document.querySelector("#term-list");
 const input = document.querySelector("#query-input");
 const feedback = document.querySelector("#query-feedback");
@@ -19,6 +26,9 @@ const result = document.querySelector("#lookup-result");
 const API_BASE = window.SIGN_API_BASE || ( ["8000", "8080"].includes(location.port)
   ? `${location.protocol}//${location.hostname}:5001`
   : location.origin);
+const KNOWLEDGE_HISTORY_KEY = "linguang.knowledge-search.v1";
+const KNOWLEDGE_HISTORY_LIMIT = 20;
+const KNOWLEDGE_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 let currentMode = "recognize";
 let cameraStream;
 let recognition;
@@ -47,15 +57,25 @@ let MIN_VALID_HAND_FRAMES = null;
 
 function setMode(mode) {
   if (mode !== "recognize" && cameraStream) stopCamera();
+  if (mode !== "communication") stopCommunicationListening();
   currentMode = mode;
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.mode === mode));
   modeButtons.forEach((item) => item.classList.toggle("active", item.dataset.mode === mode));
   const isRecognize = mode === "recognize";
+  const isLookup = mode === "video" || mode === "knowledge";
   recognizePanel.classList.toggle("hidden", !isRecognize);
-  lookupPanel.classList.toggle("hidden", isRecognize);
+  lookupPanel.classList.toggle("hidden", !isLookup);
+  document.querySelector("#book-knowledge-panel").classList.toggle("hidden", mode !== "knowledge");
+  document.querySelector("#lookup-mode-switch").classList.toggle("hidden", mode === "knowledge");
+  document.querySelector(".lookup-main").classList.toggle("hidden", mode === "knowledge");
+  document.querySelector("#lookup-aside").classList.toggle("hidden", mode === "knowledge");
+  communicationPanel.classList.toggle("hidden", mode !== "communication");
+  profilePanel.classList.toggle("hidden", mode !== "profile");
   document.querySelector("#page-title").textContent = modes[mode].title;
   document.querySelector("#page-description").textContent = modes[mode].description;
   document.querySelector("#breadcrumb-current").textContent = modes[mode].title;
+  document.querySelector("#page-eyebrow-detail").textContent = mode === "communication" ? "实时字幕与记录" : mode === "profile" ? "账号与偏好" : "限定词表";
+  document.querySelector(".scope-chip").classList.toggle("hidden", mode === "profile");
   document.querySelector("#result-label").textContent = mode === "video" ? "词条匹配" : "资料检索";
   document.querySelector("#aside-title").textContent = mode === "video" ? "词条状态" : "资料范围";
   document.querySelector("#aside-copy").textContent = mode === "video"
@@ -66,11 +86,52 @@ function setMode(mode) {
     ? "语音会先转成可编辑文字，再由你确认查询。"
     : "检索仅覆盖演示词条与别名；无审核依据时会明确告知未收录。";
   feedback.textContent = "";
-  if (!isRecognize && result.querySelector(".lookup-empty")) input.focus();
+  if (isLookup && result.querySelector(".lookup-empty")) input.focus();
+  if (mode === "knowledge") loadKnowledgeStatus();
 }
 
-navItems.forEach((item) => item.addEventListener("click", () => setMode(item.dataset.mode)));
-modeButtons.forEach((item) => item.addEventListener("click", () => setMode(item.dataset.mode)));
+navItems.forEach((item) => item.addEventListener("click", () => {
+  if (item.dataset.mode === "communication" && !window.linguangAuth?.requireLogin()) return;
+  setMode(item.dataset.mode);
+}));
+modeButtons.forEach((item) => item.addEventListener("click", () => {
+  if (item.dataset.mode === "communication" && !window.linguangAuth?.requireLogin()) return;
+  setMode(item.dataset.mode);
+}));
+
+const fontSizeSelect = document.querySelector("#app-font-size");
+const FONT_SIZE_STORAGE_KEY = "linguang-app-font-size";
+function applyAppFontSize(value) {
+  const fontSize = Number(value);
+  if (!Number.isInteger(fontSize) || fontSize < 12 || fontSize > 24 || fontSize % 2 !== 0) return false;
+  document.body.style.setProperty("--app-font-scale", String(fontSize / 14));
+  document.querySelector("#font-size-preview").style.fontSize = `${fontSize}px`;
+  fontSizeSelect.value = String(fontSize);
+  return true;
+}
+
+let storedFontSize = "14";
+try {
+  const savedPreference = localStorage.getItem(FONT_SIZE_STORAGE_KEY);
+  storedFontSize = ({ small: "12", medium: "14", large: "16" })[savedPreference] || savedPreference || "14";
+} catch {
+  // Use the default size when browser storage is unavailable.
+}
+if (!applyAppFontSize(storedFontSize)) storedFontSize = "14";
+applyAppFontSize(storedFontSize);
+try {
+  localStorage.setItem(FONT_SIZE_STORAGE_KEY, storedFontSize);
+} catch {
+  // Keep the selected size for this page session.
+}
+fontSizeSelect.addEventListener("change", () => {
+  applyAppFontSize(fontSizeSelect.value);
+  try {
+    localStorage.setItem(FONT_SIZE_STORAGE_KEY, fontSizeSelect.value);
+  } catch {
+    // Keep the selected size for this page session.
+  }
+});
 termList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-term]");
   if (!button) return;
@@ -123,7 +184,15 @@ function setRecognition(note, pipelineState = "") {
   if (transient && now - lastRecognitionRenderAt < 600) return;
   lastRecognitionRenderAt = now;
   document.querySelector("#recognition-note").textContent = note;
-  if (pipelineState) document.querySelector("#pipeline-result").textContent = pipelineState;
+  if (pipelineState) setPipelineState("pipeline-result", pipelineState);
+}
+
+function setPipelineState(id, state) {
+  const status = document.querySelector(`#${id}`);
+  status.textContent = state;
+  const row = status.closest(".pipeline-row");
+  row.dataset.state = /运行中|完成|已识别/.test(state) ? "done"
+    : /加载中|缓冲中/.test(state) ? "active" : "pending";
 }
 
 function setRecognitionResult(label) {
@@ -318,10 +387,10 @@ function processCameraFrame(now) {
     if (frameBuffer.length > FRAME_COUNT) frameBuffer.shift();
     const validFrames = validFrameCount(frameBuffer);
     document.querySelector("#camera-state").textContent = `已检测到${frame.handCount}只手`;
-    document.querySelector("#pipeline-hands").textContent = "运行中";
+    setPipelineState("pipeline-hands", "运行中");
     if (frameBuffer.length < FRAME_COUNT) {
       setRecognition(`正在收集动作窗口 ${frameBuffer.length}/${FRAME_COUNT} 帧`, "缓冲中");
-      document.querySelector("#pipeline-inference").textContent = "缓冲中";
+      setPipelineState("pipeline-inference", "缓冲中");
       return;
     }
     if (validFrames < MIN_VALID_HAND_FRAMES) {
@@ -334,7 +403,7 @@ function processCameraFrame(now) {
       }
       return;
     }
-    document.querySelector("#pipeline-inference").textContent = "运行中";
+    setPipelineState("pipeline-inference", "运行中");
     if (!predictionInFlight && now - lastPredictionAt >= PREDICTION_INTERVAL_MS) {
       lastPredictionAt = now;
       requestWindowPrediction(frameBuffer.slice(), session, predictionGeneration);
@@ -458,6 +527,206 @@ async function runLookup(query) {
   }
 }
 
+async function loadKnowledgeStatus() {
+  const badge = document.querySelector("#knowledge-mode-badge");
+  const status = document.querySelector("#book-import-status");
+  try {
+    const response = await fetch(`${API_BASE}/api/knowledge/status`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || "状态读取失败");
+    if (data.knowledgeApiVersion !== 2) throw new Error("当前连到的是旧版服务。请关闭原来的服务终端，再运行 start_sample_system.py。");
+    badge.textContent = data.retrieval === "exact_title" ? "词条精确匹配" : data.retrieval === "atlas_vector" ? "Atlas 向量检索" : "关键词检索";
+    const datasetLabel = data.collection === "SignKnowledgeChunks_v2" ? "新版词条资料" : "旧版资料";
+    status.textContent = `当前使用${datasetLabel}，已审核 ${data.approvedCount} 条，待审核 ${data.pendingCount} 条。${data.externalProcessingAllowed ? "已允许书籍内容发送到配置的模型服务。" : "当前直接显示原书内容，不调用模型。"}`;
+  } catch (error) {
+    badge.textContent = "资料状态不可用";
+    status.textContent = error.message;
+  }
+}
+
+function renderBookSources(sources) {
+  const list = document.querySelector("#book-sources");
+  list.replaceChildren();
+  for (const source of sources) {
+    const item = document.createElement("li");
+    item.className = "book-source";
+    const body = document.createElement("div");
+    body.className = "book-source-body";
+    const content = document.createElement("div");
+    content.className = "book-source-content";
+    const heading = document.createElement("strong");
+    heading.textContent = source.title || "词条片段";
+    const tags = document.createElement("div");
+    tags.className = "book-source-tags";
+    for (const label of [
+      source.book ? `第 ${source.book} 册` : "手语词典",
+      source.page ? `PDF 第 ${source.page} 页` : "EPUB 章节",
+      source.sourceFile,
+    ].filter(Boolean)) {
+      const tag = document.createElement("span");
+      tag.className = "book-source-tag";
+      tag.textContent = label;
+      tags.append(tag);
+    }
+    const text = document.createElement("p");
+    text.textContent = source.text;
+    content.append(heading, tags, text);
+    const images = document.createElement("div");
+    images.className = "book-source-images";
+    for (const imageUrl of source.images || []) {
+      const image = document.createElement("img");
+      image.src = new URL(imageUrl, API_BASE).href;
+      image.alt = `${source.title}，国家通用手语词典原图`;
+      image.loading = "lazy";
+      image.className = "book-source-image";
+      images.append(image);
+    }
+    body.append(content);
+    if (images.childElementCount) body.append(images);
+    item.append(body);
+    list.append(item);
+  }
+}
+
+function readKnowledgeHistory() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(KNOWLEDGE_HISTORY_KEY) || "[]");
+    if (!Array.isArray(entries)) return [];
+    const now = Date.now();
+    const valid = entries.filter((entry) => entry && typeof entry.query === "string"
+      && Number.isFinite(entry.savedAt) && entry.savedAt <= now
+      && Number.isFinite(new Date(entry.savedAt).getTime())
+      && now - entry.savedAt < KNOWLEDGE_HISTORY_TTL_MS
+      && entry.data && Array.isArray(entry.data.sources));
+    if (valid.length !== entries.length) localStorage.setItem(KNOWLEDGE_HISTORY_KEY, JSON.stringify(valid));
+    return valid.slice(0, KNOWLEDGE_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function renderKnowledgeHistory() {
+  const list = document.querySelector("#knowledge-search-history-list");
+  const empty = document.querySelector("#knowledge-search-history-empty");
+  const clear = document.querySelector("#knowledge-history-clear");
+  if (!list || !empty || !clear) return;
+  const entries = readKnowledgeHistory();
+  list.replaceChildren();
+  empty.hidden = entries.length > 0;
+  clear.disabled = entries.length === 0;
+  entries.forEach((entry) => {
+    const row = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "knowledge-search-history-item";
+    button.setAttribute("aria-label", `打开搜索记录：${entry.query}`);
+    const query = document.createElement("span");
+    query.className = "knowledge-search-history-query";
+    query.textContent = entry.query;
+    const time = document.createElement("time");
+    time.dateTime = new Date(entry.savedAt).toISOString();
+    time.textContent = new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).format(entry.savedAt);
+    button.append(query, time);
+    button.addEventListener("click", () => {
+      document.querySelector("#book-question").value = entry.query;
+      showKnowledgeResult(entry.data, { cachedAt: entry.savedAt });
+    });
+    row.append(button);
+    list.append(row);
+  });
+}
+
+function saveKnowledgeHistory(query, data) {
+  const savedAt = Date.now();
+  const cachedData = {
+    retrieval: data.retrieval,
+    message: data.message,
+    answerMode: data.answerMode,
+    answer: data.answer,
+    sources: (data.sources || []).map((source) => ({
+      title: source.title,
+      book: source.book,
+      page: source.page,
+      sourceFile: source.sourceFile,
+      text: source.text,
+      images: source.images || [],
+    })),
+  };
+  const key = query.toLocaleLowerCase().replace(/\s+/g, "");
+  const entries = readKnowledgeHistory().filter((entry) =>
+    entry.query.toLocaleLowerCase().replace(/\s+/g, "") !== key);
+  entries.unshift({ query, savedAt, data: cachedData });
+  try {
+    localStorage.setItem(KNOWLEDGE_HISTORY_KEY, JSON.stringify(entries.slice(0, KNOWLEDGE_HISTORY_LIMIT)));
+  } catch {
+    return;
+  }
+  renderKnowledgeHistory();
+}
+
+function showKnowledgeResult(data, { cachedAt = null } = {}) {
+  const status = document.querySelector("#book-question-status");
+  const answer = document.querySelector("#book-answer");
+  const retrievalLabel = data.retrieval === "exact_title" ? "词条精确匹配"
+    : data.retrieval === "similar" ? "相似词推荐"
+      : data.retrieval === "atlas_vector" ? "Atlas Vector Search" : "关键词";
+  status.textContent = cachedAt
+    ? `${data.message} 检索方式：${retrievalLabel}；已打开本地缓存结果。`
+    : `${data.message} 检索方式：${retrievalLabel}；${data.answerMode || ""}`;
+  if (data.answer) {
+    answer.textContent = data.answer;
+    answer.classList.remove("hidden");
+  } else {
+    answer.textContent = "";
+    answer.classList.add("hidden");
+  }
+  renderBookSources(data.sources || []);
+}
+
+document.querySelector("#knowledge-history-clear").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(KNOWLEDGE_HISTORY_KEY);
+  } catch {
+    // Storage may be unavailable in restricted browser contexts.
+  }
+  renderKnowledgeHistory();
+});
+
+document.querySelector("#book-question-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const field = document.querySelector("#book-question");
+  const status = document.querySelector("#book-question-status");
+  const answer = document.querySelector("#book-answer");
+  const submit = event.currentTarget.querySelector("button[type=submit]");
+  if (!field.value.trim()) {
+    status.textContent = "先输入你想问的内容。";
+    field.focus();
+    return;
+  }
+  submit.disabled = true;
+  status.textContent = "正在检索已审核的书籍内容…";
+  answer.classList.add("hidden");
+  answer.textContent = "";
+  document.querySelector("#book-sources").replaceChildren();
+  try {
+    const response = await fetch(`${API_BASE}/api/knowledge/search`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: field.value.trim() }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || "检索失败");
+    if (data.knowledgeApiVersion !== 2) throw new Error("当前连到的是旧版服务，结果未显示。请关闭原来的服务终端，再运行 start_sample_system.py。");
+    showKnowledgeResult(data);
+    saveKnowledgeHistory(field.value.trim(), data);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
 document.querySelector("#query-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (!input.value.trim()) {
@@ -505,7 +774,7 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
     document.querySelector("#camera-stop").disabled = false;
     document.querySelector("#camera-state").textContent = "正在加载本地识别模型";
     setRecognition("正在加载本地手部识别模型", "初始化中");
-    document.querySelector("#pipeline-hands").textContent = "加载中";
+    setPipelineState("pipeline-hands", "加载中");
     const landmarker = await createHandLandmarker();
     if (session !== cameraSession || !cameraStream) {
       landmarker.close();
@@ -516,7 +785,7 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
     document.querySelector("#camera-state").textContent = "正在检测双手";
     title.textContent = "摄像头识别已启动";
     copy.textContent = "画面在浏览器本地处理；特征序列发送到本机 API。";
-    document.querySelector("#pipeline-hands").textContent = "运行中";
+    setPipelineState("pipeline-hands", "运行中");
     animationFrame = requestAnimationFrame(processCameraFrame);
     cameraStream.getVideoTracks()[0]?.addEventListener("ended", () => {
       stopCamera();
@@ -576,8 +845,8 @@ function stopCamera() {
   predictionInFlight = false;
   setRecognitionResult("暂未识别，请重试");
   setRecognition("摄像头已关闭；再次开启将开始新一轮", "已关闭");
-  document.querySelector("#pipeline-hands").textContent = "等待开启";
-  document.querySelector("#pipeline-inference").textContent = "等待开启";
+  setPipelineState("pipeline-hands", "等待开启");
+  setPipelineState("pipeline-inference", "等待开启");
 }
 
 document.querySelector("#mic-button").addEventListener("click", () => {
@@ -606,5 +875,20 @@ document.querySelector("#mic-button").addEventListener("click", () => {
 });
 
 window.addEventListener("pagehide", stopCamera);
+window.addEventListener("pagehide", stopCommunicationListening);
 loadTerms();
+renderKnowledgeHistory();
 checkModel();
+initializeSpeechOutput();
+let communicationInitialized = false;
+window.linguangNavigate = setMode;
+initializeAuth({
+  apiBase: API_BASE,
+  onAuthenticated: (_user, newlyAuthenticated, destination) => {
+    if (!communicationInitialized) {
+      communicationInitialized = true;
+      initializeCommunication({ apiBase: API_BASE });
+    }
+    if (newlyAuthenticated) setMode(destination || "communication");
+  },
+});

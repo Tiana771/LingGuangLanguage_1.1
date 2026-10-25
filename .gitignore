@@ -23,3 +23,14 @@ debug.log
 *.log
 debug_frames/
 .DS_Store
+# 忽略环境变量文件（保护密码和密钥）
+.env
+*.env
+connection.env
+atlasconnection.env
+altasconnection.env
+book_media/
+book_review_report.json
+book_review_report_v2.json
+book_audit/
+.linguang-server-*.lock
