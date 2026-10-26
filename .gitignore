@@ -34,3 +34,7 @@ book_review_report.json
 book_review_report_v2.json
 book_audit/
 .linguang-server-*.lock
+
+
+*.pdf
+*.epub
