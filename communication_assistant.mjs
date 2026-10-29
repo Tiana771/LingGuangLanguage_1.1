@@ -2,6 +2,7 @@ import { streamAssistant } from "./deepseek_stream.mjs";
 import { getTranscriptSelection } from "./transcript_segments.mjs";
 import { appendTranscriptText, migrateLegacySegments } from "./transcript_blocks.mjs";
 import { authenticatedRequest } from "./auth_client.mjs";
+import { MAX_SPEECH_NETWORK_RETRIES, speechRetryDelay } from "./speech_retry.mjs";
 
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 const fullDateFormatter = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -16,6 +17,8 @@ let shouldListen = false;
 let listening = false;
 let interimText = "";
 let retryTimer = null;
+let speechNetworkRetryAttempts = 0;
+let speechNetworkRetryPending = false;
 let generationController = null;
 let generationRecordId = null;
 let persistTimer = null;
@@ -380,6 +383,8 @@ function ensureSpeechRecognition() {
   speechRecognition.interimResults = true;
   speechRecognition.maxAlternatives = 1;
   speechRecognition.onresult = (event) => {
+    speechNetworkRetryAttempts = 0;
+    speechNetworkRetryPending = false;
     const interim = [];
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
       const result = event.results[index];
@@ -404,13 +409,14 @@ function ensureSpeechRecognition() {
     if (["not-allowed", "service-not-allowed", "audio-capture"].includes(event.error)) {
       shouldListen = false;
       listening = false;
+      speechNetworkRetryPending = false;
       renderInterim("");
       setSpeechControls("ended");
     }
     if (event.error === "network") {
-      shouldListen = false;
       listening = false;
-      setSpeechControls("ended");
+      speechNetworkRetryPending = true;
+      el("#speech-status").textContent = "语音识别网络连接中断，正在准备重连…";
     }
     el("#speech-status").textContent = messages[event.error] || `语音识别暂不可用（${event.error}）`;
   };
@@ -418,6 +424,22 @@ function ensureSpeechRecognition() {
     listening = false;
     if (shouldListen) {
       clearTimeout(retryTimer);
+      const retryDelay = speechNetworkRetryPending
+        ? speechRetryDelay("network", speechNetworkRetryAttempts + 1)
+        : 300;
+      if (retryDelay === null || speechNetworkRetryAttempts >= MAX_SPEECH_NETWORK_RETRIES) {
+        shouldListen = false;
+        speechNetworkRetryPending = false;
+        renderInterim("");
+        setSpeechControls("ended");
+        el("#speech-status").textContent = "语音识别暂时连不上。请检查网络或代理后，点击“开始收听”重试。已确认的字幕已保留。";
+        return;
+      }
+      if (speechNetworkRetryPending) {
+        speechNetworkRetryAttempts += 1;
+        el("#speech-status").textContent = `语音服务连接中断，${Math.ceil(retryDelay / 1000)} 秒后自动重试（${speechNetworkRetryAttempts}/${MAX_SPEECH_NETWORK_RETRIES}）`;
+      }
+      speechNetworkRetryPending = false;
       retryTimer = setTimeout(() => {
         if (!shouldListen || !speechRecognition) return;
         try {
@@ -426,10 +448,11 @@ function ensureSpeechRecognition() {
           setSpeechControls("listening");
         } catch {
           shouldListen = false;
+          speechNetworkRetryPending = false;
           setSpeechControls("ended");
-          el("#speech-status").textContent = "语音识别已中断，请重新开始收听";
+          el("#speech-status").textContent = "语音识别已中断。请点击“开始收听”重试；已确认的字幕已保留。";
         }
-      }, 300);
+      }, retryDelay);
     } else {
       renderInterim("");
     }
@@ -456,6 +479,8 @@ async function startListening() {
   }
   if (!speechRecognition) ensureSpeechRecognition();
   clearTimeout(retryTimer);
+  speechNetworkRetryAttempts = 0;
+  speechNetworkRetryPending = false;
   shouldListen = true;
   try {
     speechRecognition.start();
@@ -464,12 +489,14 @@ async function startListening() {
   } catch (error) {
     shouldListen = false;
     listening = false;
+    speechNetworkRetryPending = false;
     el("#speech-status").textContent = error.name === "NotAllowedError" ? "麦克风权限未获允许" : "无法启动语音识别，请稍后重试";
   }
 }
 
 function pauseListening() {
   shouldListen = false;
+  speechNetworkRetryPending = false;
   clearTimeout(retryTimer);
   if (speechRecognition && listening) speechRecognition.stop();
   listening = false;
@@ -479,6 +506,7 @@ function pauseListening() {
 
 function finishListening() {
   shouldListen = false;
+  speechNetworkRetryPending = false;
   clearTimeout(retryTimer);
   if (speechRecognition && listening) speechRecognition.stop();
   listening = false;
@@ -489,6 +517,7 @@ function finishListening() {
 export function stopCommunicationListening() {
   if (!shouldListen && !listening) return;
   shouldListen = false;
+  speechNetworkRetryPending = false;
   clearTimeout(retryTimer);
   try { speechRecognition?.stop(); } catch { /* Recognition may already be stopped. */ }
   listening = false;

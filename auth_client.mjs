@@ -3,7 +3,8 @@ let currentUser = null;
 let authMode = "login";
 let onAuthenticated = () => {};
 let apiBase = "";
-let postAuthDestination = "communication";
+let postAuthDestination = "recognize";
+let requireLoginAtStart = false;
 let avatarDraft = "";
 
 const el = (selector) => document.querySelector(selector);
@@ -29,8 +30,9 @@ function renderUser(user) {
   el("#profile-signed-out").classList.toggle("hidden", Boolean(currentUser));
   el("#profile-content").classList.toggle("hidden", !currentUser);
   renderAvatar(el("#account-avatar"), currentUser?.avatar || "", currentUser?.displayName || currentUser?.username || "");
-  document.querySelectorAll("[data-mode='communication']").forEach((item) => {
-    item.setAttribute("aria-label", currentUser ? "沟通助手" : "沟通助手，需登录");
+  document.querySelectorAll("[data-mode='communication'], [data-mode='learning']").forEach((item) => {
+    const label = item.dataset.mode === "learning" ? "手语学习" : "沟通助手";
+    item.setAttribute("aria-label", currentUser ? label : `${label}，需登录`);
   });
 }
 
@@ -91,8 +93,8 @@ async function prepareAvatar(file) {
 function setMode(mode) {
   authMode = mode;
   const register = mode === "register";
-  el("#auth-title").textContent = register ? "注册账号" : "登录沟通助手";
-  el("#auth-description").textContent = register ? "创建账号后，沟通记录会与此账号隔离保存。" : "登录后查看并保存你的沟通记录。";
+  el("#auth-title").textContent = register ? "注册账号" : "登录聆光手语";
+  el("#auth-description").textContent = register ? "创建账号后开始使用聆光手语，个人学习和沟通记录会按账号保存。" : "登录后进入手语学习、沟通助手和平台功能。";
   el("#auth-submit").textContent = register ? "注册并登录" : "登录";
   el("#auth-form [name='password']").setAttribute("autocomplete", register ? "new-password" : "current-password");
   document.querySelectorAll("[data-auth-mode]").forEach((button) => button.classList.toggle("active", button.dataset.authMode === mode));
@@ -101,11 +103,13 @@ function setMode(mode) {
 
 function openDialog(mode = "login") {
   setMode(mode);
+  el("#auth-close").classList.toggle("hidden", requireLoginAtStart && !currentUser);
   el("#auth-dialog").classList.remove("hidden");
   el("#auth-form [name='username']").focus();
 }
 
 function closeDialog() {
+  if (requireLoginAtStart && !currentUser) return;
   el("#auth-dialog").classList.add("hidden");
 }
 
@@ -120,6 +124,7 @@ export function authenticatedRequest(path, options = {}) {
 export async function initializeAuth(options = {}) {
   onAuthenticated = options.onAuthenticated || (() => {});
   apiBase = options.apiBase || "";
+  requireLoginAtStart = options.requireLoginAtStart === true;
   window.linguangRequest = request;
   try {
     const csrf = await fetch(`${apiBase}/api/auth/csrf`, { credentials: "same-origin" });
@@ -136,14 +141,23 @@ export async function initializeAuth(options = {}) {
       onAuthenticated(payload.user, false);
     } else {
       renderUser(null);
+      if (requireLoginAtStart) {
+        postAuthDestination = "recognize";
+        openDialog("login");
+      }
     }
   } catch {
     renderUser(null);
+    if (requireLoginAtStart) {
+      postAuthDestination = "recognize";
+      openDialog("login");
+      el("#auth-status").textContent = "暂时无法连接账号服务，请检查服务是否已启动后重试。";
+    }
   }
 
   el("#auth-close").addEventListener("click", closeDialog);
   el("#auth-dialog").addEventListener("click", (event) => {
-    if (event.target === el("#auth-dialog")) closeDialog();
+    if (event.target === el("#auth-dialog") && !(requireLoginAtStart && !currentUser)) closeDialog();
   });
   document.querySelectorAll("[data-auth-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.authMode)));
   el("#auth-form").addEventListener("submit", async (event) => {
@@ -168,7 +182,7 @@ export async function initializeAuth(options = {}) {
       }
       closeDialog();
       onAuthenticated(currentUser, true, postAuthDestination);
-      postAuthDestination = "communication";
+      postAuthDestination = "recognize";
     } catch (error) {
       status.textContent = error.message;
     } finally {
@@ -256,9 +270,9 @@ export async function initializeAuth(options = {}) {
   });
   window.linguangAuth = {
     currentUser: () => currentUser,
-    requireLogin: () => {
+    requireLogin: (destination = "communication") => {
       if (currentUser) return true;
-      postAuthDestination = "communication";
+      postAuthDestination = destination;
       openDialog("login");
       return false;
     },

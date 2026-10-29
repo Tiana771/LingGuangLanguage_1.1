@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from urllib.parse import unquote, urlparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent
 ENV_FILES = ("atlasconnection.env", ".env", "altasconnection.env", "connection.env")
 LEGACY_KNOWLEDGE_COLLECTION = "SignKnowledgeChunks"
 STAGING_KNOWLEDGE_COLLECTION = "SignKnowledgeChunks_v2"
+CHINA_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def knowledge_collection_name() -> str:
@@ -51,6 +52,32 @@ def _read_env(root: Path = ROOT) -> dict[str, str]:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def learning_local_day(value: Any) -> str:
+    """Return a stored UTC timestamp as a China-local calendar date without OS tzdata."""
+    if isinstance(value, datetime):
+        timestamp = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    elif isinstance(value, str) and value.strip():
+        timestamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+    else:
+        return ""
+    return timestamp.astimezone(CHINA_TIMEZONE).date().isoformat()
+
+
+def learning_streak(reviewed_days: set[str], today: str) -> int:
+    from datetime import date, timedelta
+
+    current = date.fromisoformat(today)
+    if current.isoformat() not in reviewed_days:
+        current -= timedelta(days=1)
+    streak = 0
+    while current.isoformat() in reviewed_days:
+        streak += 1
+        current -= timedelta(days=1)
+    return streak
 
 
 def load_mongodb_uri(root: Path = ROOT) -> str:
@@ -138,6 +165,21 @@ class MongoStore:
             [("owner_user_id", 1), ("updatedAt", -1)], name="assistant_chats_owner_updated"
         )
         database["sessions"].create_index("expires_at", expireAfterSeconds=0, name="sessions_expiry")
+        database["user_learning_progress"].create_index(
+            [("owner_user_id", 1), ("entry_id", 1)], unique=True, name="learning_owner_entry_unique"
+        )
+        database["user_learning_progress"].create_index(
+            [("owner_user_id", 1), ("learning_active", 1), ("next_review_at", 1)], name="learning_due_by_owner"
+        )
+        database["user_study_lists"].create_index(
+            [("owner_user_id", 1), ("updated_at", -1)], name="study_lists_owner_updated"
+        )
+        database["learning_review_events"].create_index(
+            [("owner_user_id", 1), ("reviewed_at", -1)], name="learning_events_owner_reviewed"
+        )
+        database["learning_review_events"].create_index(
+            [("owner_user_id", 1), ("event_id", 1)], unique=True, name="learning_events_owner_event_unique"
+        )
         self._ensure_knowledge_lookup_index()
 
     def _ensure_knowledge_lookup_index(self) -> str:
@@ -195,8 +237,595 @@ class MongoStore:
         return self._database()["LingGuangAssistantChats"]
 
     @property
+    def learning_progress(self):
+        return self._database()["user_learning_progress"]
+
+    @property
+    def study_lists(self):
+        return self._database()["user_study_lists"]
+
+    @property
+    def learning_events(self):
+        return self._database()["learning_review_events"]
+
+    @property
     def knowledge_chunks(self):
         return self._database()[knowledge_collection_name()]
+
+    @property
+    def learning_knowledge(self):
+        # Learning always reads the reviewed v2 dictionary, never the legacy dataset.
+        return self._database()[STAGING_KNOWLEDGE_COLLECTION]
+
+    @staticmethod
+    def _public_learning_entry(document: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not document:
+            return None
+        return {
+            "id": str(document.get("_id", "")),
+            "title": str(document.get("entry_title") or ""),
+            "text": str(document.get("text") or ""),
+            "book": document.get("book"),
+            "page": document.get("page"),
+            "anchor": document.get("anchor"),
+            "sourceFile": str(document.get("source_file") or ""),
+            "images": [path for path in document.get("image_paths", []) if isinstance(path, str)],
+        }
+
+    def find_learning_entry(self, entry_id: str) -> dict[str, Any] | None:
+        document = self.learning_knowledge.find_one(
+            {"_id": entry_id, "review_status": "approved"}, {"embedding": 0}
+        )
+        return self._public_learning_entry(document)
+
+    def search_learning_entries(self, query: str = "", book: int | None = None, *, limit: int = 30, skip: int = 0):
+        import re
+
+        criteria: dict[str, Any] = {"review_status": "approved", "entry_title": {"$exists": True, "$ne": ""},
+                                    "text": {"$exists": True, "$ne": ""}}
+        if book is not None:
+            criteria["book"] = book
+        if query:
+            pattern = re.compile(re.escape(query.strip()), re.IGNORECASE)
+            criteria["$or"] = [{"entry_title": pattern}, {"text": pattern}]
+        cursor = (self.learning_knowledge.find(criteria, {"embedding": 0})
+                  .sort([("book", 1), ("page", 1), ("entry_title", 1)])
+                  .skip(max(0, skip)).limit(min(max(1, limit), 100)))
+        return [self._public_learning_entry(item) for item in cursor]
+
+    def count_learning_entries(self, query: str = "", book: int | None = None) -> int:
+        import re
+
+        criteria: dict[str, Any] = {"review_status": "approved", "entry_title": {"$exists": True, "$ne": ""},
+                                    "text": {"$exists": True, "$ne": ""}}
+        if book is not None:
+            criteria["book"] = book
+        if query:
+            pattern = re.compile(re.escape(query.strip()), re.IGNORECASE)
+            criteria["$or"] = [{"entry_title": pattern}, {"text": pattern}]
+        return self.learning_knowledge.count_documents(criteria)
+
+    def learning_entry_flags(self, owner_id: str, entry_ids: list[str]) -> dict[str, dict[str, bool]]:
+        if not entry_ids:
+            return {}
+        return {item["entry_id"]: {"favorite": bool(item.get("favorite")),
+                                    "learningActive": bool(item.get("learning_active"))}
+                for item in self.learning_progress.find(
+                    {"owner_user_id": owner_id, "entry_id": {"$in": entry_ids}},
+                    {"entry_id": 1, "favorite": 1, "learning_active": 1},
+                )}
+
+    def update_learning_flag(self, owner_id: str, entry_id: str, field: str, value: bool) -> bool:
+        if field not in {"favorite", "learning_active"} or not self.find_learning_entry(entry_id):
+            return False
+        now = utc_now()
+        progress = self.learning_progress.find_one({"owner_user_id": owner_id, "entry_id": entry_id}) or {}
+        values = {field: bool(value), "updated_at": now}
+        if field == "favorite" and value:
+            values["favorite_at"] = now
+        if field == "learning_active" and value and not progress.get("first_studied_at"):
+            values["next_review_at"] = now
+        self.learning_progress.update_one(
+            {"owner_user_id": owner_id, "entry_id": entry_id},
+            {"$set": values,
+             "$setOnInsert": {"owner_user_id": owner_id, "entry_id": entry_id, "interval_days": 0,
+                               "repetitions": 0, "attempt_count": 0}},
+            upsert=True,
+        )
+        return True
+
+    def get_learning_settings(self, owner_id: str) -> dict[str, int]:
+        user = self.users.find_one({"_id": owner_id}, {"learning_settings": 1})
+        stored = user.get("learning_settings", {}) if user else {}
+        target = stored.get("daily_new_target", 5) if isinstance(stored, dict) else 5
+        return {"dailyNewTarget": target if target in {3, 5, 10} else 5}
+
+    def save_learning_settings(self, owner_id: str, target: int) -> dict[str, int] | None:
+        result = self.users.update_one({"_id": owner_id}, {"$set": {"learning_settings.daily_new_target": target}})
+        return self.get_learning_settings(owner_id) if result.matched_count else None
+
+    def find_user_study_list(self, owner_id: str, list_id: str):
+        return self.study_lists.find_one({"_id": list_id, "owner_user_id": owner_id})
+
+    def get_learning_today(self, owner_id: str, new_target: int) -> dict[str, Any]:
+        from datetime import datetime, time, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        local_zone = CHINA_TIMEZONE
+        today = now.astimezone(local_zone).date()
+        today_key = today.isoformat()
+        now_iso = now.isoformat()
+        day_start = datetime.combine(today, time.min, local_zone).astimezone(timezone.utc).isoformat()
+        events_today = list(self.learning_events.find(
+            {"owner_user_id": owner_id, "$or": [
+                {"session_date": today_key},
+                {"session_date": {"$exists": False}, "reviewed_at": {"$gte": day_start}},
+            ]},
+            {"rating": 1, "is_new": 1},
+        ))
+        new_done = sum(1 for event in events_today if event.get("is_new"))
+        today_repeats = list(self.learning_progress.find({
+            "owner_user_id": owner_id, "learning_active": True,
+            "day_session_date": today_key, "day_session_complete": False,
+        }).sort("updated_at", 1))
+        repeat_ids = {item["entry_id"] for item in today_repeats}
+        due_progress = list(self.learning_progress.find({
+            "owner_user_id": owner_id, "learning_active": True,
+            "next_review_at": {"$lte": now_iso},
+            "entry_id": {"$nin": list(repeat_ids)},
+        }).sort("next_review_at", 1).limit(100))
+        due_new = [item for item in due_progress if not item.get("first_studied_at")]
+        remaining_new = max(0, min(10, new_target) - new_done - len(due_new))
+        studied_ids = [item["entry_id"] for item in self.learning_progress.find(
+            {"owner_user_id": owner_id, "first_studied_at": {"$exists": True}}, {"entry_id": 1}
+        )]
+        excluded_ids = list({*studied_ids, *(item["entry_id"] for item in due_progress)})
+        fresh = []
+        if remaining_new:
+            fresh_cursor = (self.learning_knowledge.find({
+                "review_status": "approved", "entry_title": {"$exists": True, "$ne": ""},
+                "text": {"$exists": True, "$ne": ""}, "_id": {"$nin": excluded_ids},
+            }, {"embedding": 0}).sort([("book", 1), ("page", 1), ("entry_title", 1)])
+                .limit(remaining_new))
+            fresh = [self._public_learning_entry(item) for item in fresh_cursor]
+
+        due_entries = self._entries_by_ids([item["entry_id"] for item in due_progress])
+        due = []
+        for progress in due_progress:
+            entry = due_entries.get(progress["entry_id"])
+            if entry:
+                due.append({**entry, "isNew": not bool(progress.get("first_studied_at")),
+                            "nextReviewAt": progress.get("next_review_at")})
+
+        reviewed_days = sorted({event.get("session_date") or learning_local_day(event.get("reviewed_at"))
+                                for event in self.learning_events.find(
+            {"owner_user_id": owner_id}, {"reviewed_at": 1}
+        ) if event.get("reviewed_at") and (event.get("session_date") or learning_local_day(event.get("reviewed_at")))})
+        reviewed_set = set(reviewed_days)
+        streak = learning_streak(reviewed_set, today_key)
+
+        completed_today = self.learning_progress.count_documents({
+            "owner_user_id": owner_id, "day_session_date": today_key, "day_session_complete": True,
+        })
+        repeat_entries = self._entries_by_ids([item["entry_id"] for item in today_repeats])
+        repeat_cards = [{**repeat_entries[item["entry_id"]], "isNew": bool(item.get("day_session_is_new")),
+                         "todayRepeat": True, "masterySuccesses": item.get("day_session_successes", 0),
+                         "masteryRequired": item.get("day_session_required", 0)}
+                        for item in today_repeats if item["entry_id"] in repeat_entries]
+
+        return {
+            "due": due,
+            "new": fresh,
+            "todayRepeat": repeat_cards,
+            "counts": {"due": len(due) + len(repeat_cards), "new": len(fresh), "completed": completed_today,
+                       "newCompleted": new_done, "today": today_key, "streak": streak},
+        }
+
+    def _entries_by_ids(self, entry_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not entry_ids:
+            return {}
+        documents = self.learning_knowledge.find(
+            {"_id": {"$in": entry_ids}, "review_status": "approved"}, {"embedding": 0}
+        )
+        return {str(item["_id"]): self._public_learning_entry(item) for item in documents}
+
+    def _learning_titles_by_ids(self, entry_ids: list[str]) -> dict[str, str]:
+        if not entry_ids:
+            return {}
+        documents = self.learning_knowledge.find(
+            {"_id": {"$in": entry_ids}, "review_status": "approved"}, {"entry_title": 1}
+        )
+        return {str(item["_id"]): str(item.get("entry_title") or "") for item in documents}
+
+    def record_learning_review(self, owner_id: str, entry_id: str, rating: str, event_id: str):
+        from datetime import datetime, timezone
+
+        from pymongo.errors import DuplicateKeyError
+
+        from learning_schedule import RATINGS, next_review, update_day_mastery
+
+        if rating not in RATINGS:
+            raise ValueError("Unsupported learning rating")
+        entry = self.find_learning_entry(entry_id)
+        if not entry:
+            return None
+        existing = self.learning_events.find_one({"owner_user_id": owner_id, "event_id": event_id})
+        if existing:
+            progress = self.learning_progress.find_one({"owner_user_id": owner_id, "entry_id": entry_id}) or {}
+            return {"entry": entry, "progress": progress, "duplicate": True,
+                    "dayComplete": progress.get("day_session_complete", True),
+                    "repeatToday": not progress.get("day_session_complete", True),
+                    "masterySuccesses": progress.get("day_session_successes", 0),
+                    "masteryRequired": progress.get("day_session_required", 0),
+                    "initialRating": progress.get("day_session_initial_rating")}
+
+        now = datetime.now(timezone.utc)
+        today_key = now.astimezone(CHINA_TIMEZONE).date().isoformat()
+        previous = self.learning_progress.find_one({"owner_user_id": owner_id, "entry_id": entry_id}) or {}
+        is_new = not bool(previous.get("first_studied_at"))
+        same_day_session = previous.get("day_session_date") == today_key and not previous.get("day_session_complete")
+        mastery = update_day_mastery(
+            existing_session=same_day_session,
+            previous_required=previous.get("day_session_required", 0),
+            previous_successes=previous.get("day_session_successes", 0),
+            previous_initial_rating=previous.get("day_session_initial_rating", rating),
+            previous_is_new=previous.get("day_session_is_new", is_new),
+            is_new=is_new,
+            rating=rating,
+        )
+        required = mastery["required"]
+        successes = mastery["successes"]
+        initial_rating = mastery["initial_rating"]
+        session_is_new = mastery["session_is_new"]
+        day_complete = mastery["complete"]
+        if day_complete:
+            schedule = next_review(previous.get("interval_days", 0), "remembered", now,
+                                   is_new=session_is_new)
+        else:
+            schedule = {"interval_days": previous.get("interval_days", 0),
+                        "next_review_at": now.isoformat(), "repetitions_reset": False}
+        event = {"owner_user_id": owner_id, "event_id": event_id, "entry_id": entry_id,
+                 "entry_title": entry["title"], "rating": rating, "is_new": is_new,
+                 "reviewed_at": now.isoformat(), "session_date": today_key,
+                 "day_complete": day_complete, "mastery_successes": successes,
+                 "mastery_required": required}
+        try:
+            self.learning_events.insert_one(event)
+        except DuplicateKeyError:
+            updated = self.learning_progress.find_one({"owner_user_id": owner_id, "entry_id": entry_id}) or {}
+            return {"entry": entry, "progress": updated, "duplicate": True,
+                    "dayComplete": updated.get("day_session_complete", True),
+                    "repeatToday": not updated.get("day_session_complete", True),
+                    "masterySuccesses": updated.get("day_session_successes", 0),
+                    "masteryRequired": updated.get("day_session_required", 0),
+                    "initialRating": updated.get("day_session_initial_rating")}
+        progress_values = {"learning_active": True, "entry_title": entry["title"],
+                           "interval_days": schedule["interval_days"],
+                           "next_review_at": schedule["next_review_at"], "last_rating": rating,
+                           "last_studied_at": now.isoformat(), "updated_at": now.isoformat(),
+                           "day_session_date": today_key, "day_session_required": required,
+                           "day_session_successes": successes, "day_session_initial_rating": initial_rating,
+                           "day_session_is_new": session_is_new, "day_session_complete": day_complete}
+        if is_new:
+            progress_values["first_studied_at"] = now.isoformat()
+        self.learning_progress.update_one(
+            {"owner_user_id": owner_id, "entry_id": entry_id},
+            {"$set": progress_values,
+             "$setOnInsert": {"owner_user_id": owner_id, "entry_id": entry_id,
+                               "favorite": False, "repetitions": 0},
+             "$inc": {"attempt_count": 1}},
+            upsert=True,
+        )
+        if not schedule["repetitions_reset"] and rating == "remembered":
+            self.learning_progress.update_one(
+                {"owner_user_id": owner_id, "entry_id": entry_id}, {"$inc": {"repetitions": 1}}
+            )
+        elif schedule["repetitions_reset"]:
+            self.learning_progress.update_one(
+                {"owner_user_id": owner_id, "entry_id": entry_id}, {"$set": {"repetitions": 0}}
+            )
+        progress = self.learning_progress.find_one({"owner_user_id": owner_id, "entry_id": entry_id}) or {}
+        self.learning_events.update_one({"owner_user_id": owner_id, "event_id": event_id},
+                                        {"$set": {"processed": True}})
+        return {"entry": entry, "progress": progress, "duplicate": False,
+                "dayComplete": day_complete, "repeatToday": mastery["repeat_today"],
+                "masterySuccesses": successes, "masteryRequired": required,
+                "initialRating": initial_rating}
+
+    def learning_stats(self, owner_id: str, days: int = 7) -> dict[str, Any]:
+        from collections import Counter
+        from datetime import datetime, timedelta, timezone
+
+        days = 30 if days == 30 else 7
+        now = datetime.now(timezone.utc)
+        local_zone = CHINA_TIMEZONE
+        local_today = now.astimezone(local_zone).date()
+        since_date = local_today - timedelta(days=days - 1)
+        since = datetime.combine(since_date, datetime.min.time(), local_zone).astimezone(timezone.utc).isoformat()
+        events = list(self.learning_events.find(
+            {"owner_user_id": owner_id, "reviewed_at": {"$gte": since}, "processed": {"$ne": False}},
+            {"entry_id": 1, "reviewed_at": 1, "session_date": 1, "rating": 1,
+             "is_new": 1, "day_complete": 1},
+        ))
+        counts = Counter(event.get("rating", "") for event in events)
+        today_key = local_today.isoformat()
+        today_events = [event for event in events if (event.get("session_date") or learning_local_day(event.get("reviewed_at"))) == today_key]
+        today_first_event_by_entry: dict[str, dict[str, Any]] = {}
+        for event in sorted(today_events, key=lambda item: item.get("reviewed_at", "")):
+            if event.get("entry_id"):
+                today_first_event_by_entry.setdefault(event["entry_id"], event)
+        today_new_ids = {entry_id for entry_id, event in today_first_event_by_entry.items() if event.get("is_new")}
+        today_review_ids = set(today_first_event_by_entry) - today_new_ids
+        per_day: dict[str, Counter] = {}
+        for event in events:
+            day = event.get("session_date") or learning_local_day(event.get("reviewed_at"))
+            per_day.setdefault(day, Counter())[event.get("rating", "reviewed")] += 1
+        chart = []
+        for offset in range(days - 1, -1, -1):
+            day = (local_today - timedelta(days=offset)).isoformat()
+            daily = per_day.get(day, Counter())
+            chart.append({"date": day, "total": sum(daily.values()), "remembered": daily["remembered"],
+                          "fuzzy": daily["fuzzy"], "forgot": daily["forgot"]})
+        active_progress = list(self.learning_progress.find({"owner_user_id": owner_id}, {
+            "first_studied_at": 1, "learning_active": 1, "next_review_at": 1, "last_rating": 1,
+            "entry_id": 1, "entry_title": 1, "day_session_date": 1,
+            "day_session_required": 1, "day_session_successes": 1,
+        }))
+        learned = [item for item in active_progress if item.get("first_studied_at")]
+        now_iso = now.isoformat()
+        return {
+            "days": days,
+            "totals": {"learnedWords": len(learned), "todayWords": len(today_new_ids | today_review_ids),
+                       "todayNewWords": len(today_new_ids), "todayReviewWords": len(today_review_ids),
+                       "practiceCount": len(events),
+                       "remembered": counts["remembered"], "fuzzy": counts["fuzzy"], "forgot": counts["forgot"],
+                       "due": sum(1 for item in active_progress if item.get("learning_active") and item.get("next_review_at", "") <= now_iso)},
+            "chart": chart,
+            "hardWords": self._learning_hard_words(owner_id, local_today.isoformat()),
+        }
+
+    def _learning_hard_words(self, owner_id: str, today_key: str) -> list[dict[str, Any]]:
+        from collections import defaultdict
+        from datetime import datetime, timedelta
+
+        zone = CHINA_TIMEZONE
+        events = list(self.learning_events.find(
+            {"owner_user_id": owner_id, "rating": {"$in": ["forgot", "fuzzy"]},
+             "processed": {"$ne": False}},
+            {"entry_id": 1, "entry_title": 1, "rating": 1, "session_date": 1, "reviewed_at": 1},
+        ).sort("reviewed_at", -1).limit(2000))
+        days_by_entry: dict[str, set[str]] = defaultdict(set)
+        titles: dict[str, str] = {}
+        forgotten_today: dict[str, dict[str, Any]] = {}
+        for event in events:
+            entry_id = str(event.get("entry_id", ""))
+            if not entry_id:
+                continue
+            reviewed_at = event.get("reviewed_at", "")
+            day = event.get("session_date") or learning_local_day(reviewed_at)
+            title = event.get("entry_title", "")
+            titles[entry_id] = title
+            days_by_entry[entry_id].add(day)
+            if day == today_key and event.get("rating") == "forgot":
+                forgotten_today[entry_id] = {"id": entry_id, "title": title, "reason": "今天忘记了", "date": day}
+
+        result = list(forgotten_today.values())
+        seen = set(forgotten_today)
+        repeated = []
+        for entry_id, days in days_by_entry.items():
+            if entry_id in seen or len(days) < 2:
+                continue
+            ordered = sorted(days, reverse=True)
+            latest_day = datetime.fromisoformat(ordered[0]).date()
+            if latest_day not in {datetime.fromisoformat(today_key).date(),
+                                  datetime.fromisoformat(today_key).date() - timedelta(days=1)}:
+                continue
+            streak = 1
+            for previous_day, next_day in zip(ordered, ordered[1:]):
+                if datetime.fromisoformat(previous_day).date().toordinal() - datetime.fromisoformat(next_day).date().toordinal() != 1:
+                    break
+                streak += 1
+            if streak >= 2:
+                repeated.append(entry_id)
+        repeated.sort(key=lambda entry_id: max(days_by_entry[entry_id]), reverse=True)
+        result.extend({"id": entry_id, "title": titles[entry_id], "reason": "多天反馈模糊或忘记",
+                       "date": max(days_by_entry[entry_id])} for entry_id in repeated[:8])
+        return result[:16]
+
+    def learning_stat_words(self, owner_id: str, category: str, days: int = 7) -> list[dict[str, Any]]:
+        from collections import defaultdict
+        from datetime import datetime, timedelta, timezone
+
+        zone = CHINA_TIMEZONE
+        today = datetime.now(timezone.utc).astimezone(zone).date()
+        since_day = today - timedelta(days=max(1, min(days, 30)) - 1)
+        since = datetime.combine(since_day, datetime.min.time(), zone).astimezone(timezone.utc).isoformat()
+        grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        if category == "today":
+            today_key = today.isoformat()
+            day_start = datetime.combine(today, datetime.min.time(), zone).astimezone(timezone.utc).isoformat()
+            events = self.learning_events.find(
+                {"owner_user_id": owner_id, "processed": {"$ne": False}, "$or": [
+                    {"session_date": today_key},
+                    {"session_date": {"$exists": False}, "reviewed_at": {"$gte": day_start}},
+                ]},
+                {"entry_id": 1, "entry_title": 1, "reviewed_at": 1, "is_new": 1},
+            ).sort("reviewed_at", 1)
+            first_event_by_entry: dict[str, dict[str, Any]] = {}
+            for event in events:
+                entry_id = str(event.get("entry_id", ""))
+                if entry_id:
+                    first_event_by_entry.setdefault(entry_id, event)
+            for entry_id, event in first_event_by_entry.items():
+                key = "new" if event.get("is_new") else "review"
+                grouped[key][entry_id] = {"id": entry_id, "title": event.get("entry_title", "")}
+            return [{"date": today_key, "type": key,
+                     "entries": sorted(entries.values(), key=lambda item: item["title"])}
+                    for key, entries in (("new", grouped["new"]), ("review", grouped["review"]))
+                    if entries]
+        if category in {"all", "remembered", "fuzzy", "forgot"}:
+            event_filter: dict[str, Any] = {"owner_user_id": owner_id, "reviewed_at": {"$gte": since},
+                                            "processed": {"$ne": False}}
+            if category != "all":
+                event_filter["rating"] = category
+            for event in self.learning_events.find(
+                event_filter,
+                {"entry_id": 1, "entry_title": 1, "reviewed_at": 1, "session_date": 1},
+            ).sort("reviewed_at", -1):
+                day = event.get("session_date") or learning_local_day(event.get("reviewed_at"))
+                entry_id = str(event.get("entry_id", ""))
+                if entry_id:
+                    grouped[day][entry_id] = {"id": entry_id, "title": event.get("entry_title", "")}
+        elif category == "learned":
+            progress_filter = {"owner_user_id": owner_id, "first_studied_at": {"$exists": True}}
+            learned_progress = list(self.learning_progress.find(
+                progress_filter,
+                {"entry_id": 1, "entry_title": 1, "first_studied_at": 1},
+            ).sort("first_studied_at", -1))
+            missing_titles = [item["entry_id"] for item in learned_progress if not item.get("entry_title")]
+            title_fallbacks = self._entries_by_ids(missing_titles)
+            for progress in learned_progress:
+                timestamp = progress.get("first_studied_at", "")
+                try:
+                    day = learning_local_day(timestamp)
+                except ValueError:
+                    continue
+                if progress.get("entry_id"):
+                    title = progress.get("entry_title") or title_fallbacks.get(progress["entry_id"], {}).get("title", "")
+                    grouped[day][progress["entry_id"]] = {"id": progress["entry_id"], "title": title}
+        elif category == "due":
+            now_iso = datetime.now(timezone.utc).isoformat()
+            progress_items = list(self.learning_progress.find(
+                {"owner_user_id": owner_id, "learning_active": True, "next_review_at": {"$lte": now_iso}},
+                {"entry_id": 1, "next_review_at": 1},
+            ).sort("next_review_at", 1).limit(500))
+            entries = self._entries_by_ids([item["entry_id"] for item in progress_items])
+            for item in progress_items:
+                entry = entries.get(item["entry_id"])
+                if not entry:
+                    continue
+                try:
+                    due_date = datetime.fromisoformat(item.get("next_review_at", "").replace("Z", "+00:00")).astimezone(zone).date()
+                    day = "逾期" if due_date < today else due_date.isoformat()
+                except ValueError:
+                    day = "逾期"
+                grouped[day][item["entry_id"]] = {"id": item["entry_id"], "title": entry["title"]}
+        return [{"date": day, "entries": sorted(items.values(), key=lambda value: value["title"])}
+                for day, items in sorted(grouped.items(), reverse=True)]
+
+    def list_learning_lists(self, owner_id: str):
+        favorites = list(self.learning_progress.find(
+            {"owner_user_id": owner_id, "favorite": True}, {"entry_id": 1, "favorite_at": 1}
+        ).sort("favorite_at", -1))
+        favorite_entries = self._learning_titles_by_ids([item["entry_id"] for item in favorites])
+        favorite_entries = [{"id": item["entry_id"], "title": favorite_entries[item["entry_id"]],
+                             "favoritedAt": item.get("favorite_at", "")}
+                            for item in favorites if item["entry_id"] in favorite_entries]
+        custom = []
+        for item in self.study_lists.find({"owner_user_id": owner_id}).sort("updated_at", -1):
+            entries = self._learning_titles_by_ids(item.get("entry_ids", []))
+            custom.append({"id": item["_id"], "title": item.get("title", "未命名词单"),
+                           "entries": [{"id": key, "title": entries[key]}
+                                       for key in item.get("entry_ids", []) if key in entries],
+                           "updatedAt": item.get("updated_at", "")})
+        return {"favorites": favorite_entries, "lists": custom}
+
+    def create_learning_list(self, owner_id: str, title: str):
+        from uuid import uuid4
+
+        document = {"_id": str(uuid4()), "owner_user_id": owner_id, "title": title,
+                    "entry_ids": [], "created_at": utc_now(), "updated_at": utc_now()}
+        self.study_lists.insert_one(document)
+        return {"id": document["_id"], "title": title, "entries": [], "updatedAt": document["updated_at"]}
+
+    def rename_learning_list(self, owner_id: str, list_id: str, title: str) -> bool:
+        result = self.study_lists.update_one({"_id": list_id, "owner_user_id": owner_id},
+                                             {"$set": {"title": title, "updated_at": utc_now()}})
+        return result.matched_count == 1
+
+    def delete_learning_list(self, owner_id: str, list_id: str) -> bool:
+        return self.study_lists.delete_one({"_id": list_id, "owner_user_id": owner_id}).deleted_count == 1
+
+    def update_learning_list_entry(self, owner_id: str, list_id: str, entry_id: str, add: bool) -> bool:
+        if not self.find_learning_entry(entry_id):
+            return False
+        operation = {"$addToSet": {"entry_ids": entry_id}} if add else {"$pull": {"entry_ids": entry_id}}
+        operation["$set"] = {"updated_at": utc_now()}
+        result = self.study_lists.update_one({"_id": list_id, "owner_user_id": owner_id}, operation)
+        return result.matched_count == 1
+
+    def batch_save_learning_entries(self, owner_id: str, entry_ids: list[str], *, action: str,
+                                    list_id: str = "", list_title: str = "") -> dict[str, Any]:
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        unique_ids = list(dict.fromkeys(entry_ids))[:50]
+        valid_ids = [str(item["_id"]) for item in self.learning_knowledge.find(
+            {"_id": {"$in": unique_ids}, "review_status": "approved"}, {"_id": 1}
+        )]
+        valid_set = set(valid_ids)
+        skipped = len(unique_ids) - len(valid_set)
+        now = utc_now()
+        if action == "favorite":
+            added = 0
+            for entry_id in valid_ids:
+                current = self.learning_progress.find_one(
+                    {"owner_user_id": owner_id, "entry_id": entry_id}, {"favorite": 1}
+                ) or {}
+                if current.get("favorite"):
+                    continue
+                self.learning_progress.update_one(
+                    {"owner_user_id": owner_id, "entry_id": entry_id},
+                    {"$set": {"favorite": True, "favorite_at": now, "updated_at": now},
+                     "$setOnInsert": {"owner_user_id": owner_id, "entry_id": entry_id,
+                                       "interval_days": 0, "repetitions": 0, "attempt_count": 0}},
+                    upsert=True,
+                )
+                added += 1
+            return {"action": action, "added": added, "alreadyPresent": len(valid_ids) - added,
+                    "skipped": skipped}
+
+        if action == "plan":
+            already_due = {
+                item["entry_id"] for item in self.learning_progress.find(
+                    {"owner_user_id": owner_id, "entry_id": {"$in": valid_ids}, "learning_active": True},
+                    {"entry_id": 1, "next_review_at": 1},
+                ) if item.get("next_review_at", "") <= now
+            }
+            for entry_id in valid_ids:
+                self.learning_progress.update_one(
+                    {"owner_user_id": owner_id, "entry_id": entry_id},
+                    {"$set": {"learning_active": True, "next_review_at": now, "updated_at": now},
+                     "$setOnInsert": {"owner_user_id": owner_id, "entry_id": entry_id,
+                                       "interval_days": 0, "repetitions": 0, "attempt_count": 0}},
+                    upsert=True,
+                )
+            return {"action": action, "added": len(valid_ids) - len(already_due),
+                    "alreadyPresent": len(already_due),
+                    "skipped": skipped}
+
+        if action != "list" or (not list_id and not list_title):
+            raise ValueError("A list target is required")
+        target = None
+        if list_id:
+            target = self.study_lists.find_one({"_id": list_id, "owner_user_id": owner_id})
+            if not target:
+                return {"missingList": True}
+        else:
+            target = self.study_lists.find_one({"owner_user_id": owner_id, "title": list_title})
+            if not target:
+                target = {"_id": str(uuid4()), "owner_user_id": owner_id, "title": list_title,
+                          "entry_ids": [], "created_at": now, "updated_at": now}
+                self.study_lists.insert_one(target)
+        existing = set(target.get("entry_ids", []))
+        new_ids = [entry_id for entry_id in valid_ids if entry_id not in existing]
+        if new_ids:
+            self.study_lists.update_one(
+                {"_id": target["_id"], "owner_user_id": owner_id},
+                {"$addToSet": {"entry_ids": {"$each": new_ids}}, "$set": {"updated_at": now}},
+            )
+        return {"action": action, "listId": target["_id"], "listTitle": target["title"],
+                "added": len(new_ids), "alreadyPresent": len(valid_ids) - len(new_ids), "skipped": skipped}
 
     def upsert_knowledge_chunks(self, documents: list[dict[str, Any]]) -> int:
         from pymongo import UpdateOne

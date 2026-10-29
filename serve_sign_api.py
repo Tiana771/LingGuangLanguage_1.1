@@ -354,6 +354,139 @@ def _qwen_book_answer(question: str, sources: list[dict[str, Any]]) -> str:
     return answer.strip()
 
 
+def _qwen_book_json(messages: list[dict[str, str]], *, max_tokens: int = 600) -> dict[str, Any]:
+    key = (os.environ.get("QWEN_API_KEY") or _book_api_key()).strip()
+    if not key:
+        raise RuntimeError("Qwen credentials are not configured")
+    base_url = os.environ.get(
+        "BOOK_QWEN_BASE_URL", "https://cn-beijing.maas.qianwenaiapi.com/compatible-mode/v1"
+    ).strip().rstrip("/")
+    endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+    body = json.dumps({
+        "model": os.environ.get("BOOK_QWEN_MODEL", "qwen3.8-flash").strip(),
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+    }, ensure_ascii=False).encode("utf-8")
+    req = Request(endpoint, data=body, headers={
+        "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+    }, method="POST")
+    with urlopen(req, timeout=45) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    content = result["choices"][0]["message"]["content"]
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Qwen response was empty")
+    raw = content.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("Qwen response did not contain a JSON object")
+    parsed = json.loads(raw[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("Qwen response was not a JSON object")
+    return parsed
+
+
+def _qwen_knowledge_plan(question: str) -> dict[str, Any]:
+    result = _qwen_book_json([
+        {"role": "system", "content": (
+            "你负责理解手语词典搜索请求并生成检索计划，不回答用户问题。"
+            "用户可能查单个词，也可能按场景找词。只输出 JSON："
+            "{\"intent\":\"term|scenario\",\"topic\":\"主题名称\",\"search_terms\":[\"词或短语\"],\"list_title\":\"建议词单名\"}。"
+            "检索词必须是中文词语或短语，最多8个，去掉提问套话。"
+            "场景意图要给出场景常见表达、同义说法和可能相关词，但不能声称这些词已存在词典。"
+            "单词查询应保留被查词，不要扩写成不相关内容。主题名称和词单名简短。"
+        )},
+        {"role": "user", "content": question},
+    ], max_tokens=260)
+    intent = "scenario" if result.get("intent") == "scenario" else "term"
+    terms = result.get("search_terms", [])
+    if not isinstance(terms, list):
+        terms = []
+    clean_terms = []
+    for term in terms:
+        if isinstance(term, str):
+            term = term.strip()[:40]
+            if term and term not in clean_terms:
+                clean_terms.append(term)
+        if len(clean_terms) >= 8:
+            break
+    topic = result.get("topic") if isinstance(result.get("topic"), str) else ""
+    list_title = result.get("list_title") if isinstance(result.get("list_title"), str) else ""
+    return {"intent": intent, "topic": topic.strip()[:40], "search_terms": clean_terms,
+            "list_title": list_title.strip()[:40]}
+
+
+def _qwen_select_knowledge(question: str, candidates: list[dict[str, Any]], topic: str) -> dict[str, Any]:
+    compact = [{"id": item["id"], "title": item["title"], "text": item["text"][:420],
+                "book": item.get("book"), "page": item.get("page")}
+               for item in candidates]
+    result = _qwen_book_json([
+        {"role": "system", "content": (
+            "你是手语词典场景词汇筛选器。只从候选数组选择与用户场景有关的真实词条。"
+            "不得创造、改写或补充词条及动作说明；每个 id 必须原样来自候选数组。"
+            "最多选择12个，优先最实用、直接相关的词。无关则不选。"
+            "只输出 JSON：{\"summary\":\"一句简短说明\",\"items\":[{\"id\":\"原候选id\",\"reason\":\"简短相关理由\"}]}。"
+        )},
+        {"role": "user", "content": json.dumps({"question": question, "topic": topic,
+                                                   "candidates": compact}, ensure_ascii=False)},
+    ], max_tokens=700)
+    allowed = {item["id"] for item in candidates}
+    seen = set()
+    selected = []
+    raw_items = result.get("items", [])
+    if isinstance(raw_items, list):
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if item_id not in allowed or item_id in seen:
+                continue
+            reason = item.get("reason") if isinstance(item.get("reason"), str) else ""
+            selected.append({"id": item_id, "reason": reason.strip()[:120]})
+            seen.add(item_id)
+            if len(selected) == 12:
+                break
+    summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
+    return {"items": selected, "summary": summary.strip()[:240]}
+
+
+def _keyword_scenario_candidates(
+    candidates: list[dict[str, Any]], search_terms: list[str], topic: str, limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Keep only retrieved entries with visible lexical evidence for the requested scene."""
+    terms = list(dict.fromkeys([topic, *search_terms]))
+    terms = [re.sub(r"\s+", "", term).casefold() for term in terms if isinstance(term, str) and term.strip()]
+    ranked = []
+    for item in candidates:
+        title = re.sub(r"\s+", "", str(item.get("title") or "")).casefold()
+        text = re.sub(r"\s+", "", str(item.get("text") or "")).casefold()
+        title_hits = [term for term in terms if term and term in title]
+        text_hits = [term for term in terms if term and term in text]
+        if not title_hits and not text_hits:
+            continue
+        ranked.append((len(title_hits) * 3 + len(text_hits), item))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in ranked[:limit]]
+
+
+def _fallback_knowledge_plan(question: str) -> dict[str, Any]:
+    compact = re.sub(r"\s+", "", question)
+    scene_words = ("场景", "哪些词", "有什么词", "会用到", "相关词", "有关的词", "常用词")
+    intent = "scenario" if any(marker in compact for marker in scene_words) else "term"
+    topic = ""
+    for marker in ("场景", "相关", "有关", "会用到", "有哪些", "有什么"):
+        if marker in compact:
+            topic = compact.split(marker, 1)[0].replace("关于", "").strip("，。！？")
+            topic = re.sub(r"(里面|里|之内|内)$", "", topic)
+            if topic:
+                break
+    terms = [topic] if topic else [compact]
+    return {"intent": intent, "topic": topic[:40], "search_terms": terms[:8],
+            "list_title": f"{topic}场景"[:40] if topic else ""}
+
+
 def _book_similarity_min_score() -> float:
     try:
         value = float(os.environ.get("BOOK_SIMILARITY_MIN_SCORE", "0.62"))
@@ -469,14 +602,14 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
 
     app.session_interface = MongoSessionInterface(store)
 
-    protected_prefixes = ("/api/communications", "/api/history", "/api/assistant/stream", "/api/auth/password", "/api/auth/profile")
+    protected_prefixes = ("/api/communications", "/api/history", "/api/assistant/stream", "/api/auth/password", "/api/auth/profile", "/api/learning")
     csrf_prefixes = ("/api/auth/register", "/api/auth/login", "/api/auth/logout", "/api/auth/password", "/api/auth/profile",
-                     "/api/communications", "/api/history", "/api/assistant/stream")
+                     "/api/communications", "/api/history", "/api/assistant/stream", "/api/learning")
 
     @app.before_request
     def enforce_session_security():
         if request.path.startswith(protected_prefixes) and not session.get(SESSION_USER_KEY):
-            return _json_error("请先登录后使用沟通助手。", 401)
+            return _json_error("请先登录后使用此功能。", 401)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path.startswith(csrf_prefixes):
             expected = session.get(CSRF_SESSION_KEY)
             provided = request.headers.get("X-CSRF-Token", "")
@@ -725,6 +858,264 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             app.logger.error("conversation clear failed: %s", type(exc).__name__)
             return _json_error("沟通记录无法清空，请稍后重试。", 503)
 
+    @app.get("/api/learning/today")
+    def learning_today():
+        owner_id = session[SESSION_USER_KEY]
+        try:
+            repository = store()
+            settings = repository.get_learning_settings(owner_id)
+            plan = repository.get_learning_today(owner_id, settings["dailyNewTarget"])
+            return jsonify({**plan, "settings": settings})
+        except Exception as exc:
+            app.logger.error("learning today load failed: %s", type(exc).__name__)
+            return _json_error("今日学习内容暂时无法读取，请稍后重试。", 503)
+
+    @app.get("/api/learning/settings")
+    def learning_settings():
+        try:
+            return jsonify({"settings": store().get_learning_settings(session[SESSION_USER_KEY])})
+        except Exception as exc:
+            app.logger.error("learning settings load failed: %s", type(exc).__name__)
+            return _json_error("学习设置暂时无法读取，请稍后重试。", 503)
+
+    @app.put("/api/learning/settings")
+    def update_learning_settings():
+        payload = request.get_json(silent=True)
+        target = payload.get("dailyNewTarget") if isinstance(payload, dict) else None
+        if isinstance(target, bool) or target not in {3, 5, 10}:
+            return _json_error("每日新词目标请选择 3、5 或 10 个。", 400)
+        try:
+            settings = store().save_learning_settings(session[SESSION_USER_KEY], target)
+        except Exception as exc:
+            app.logger.error("learning settings save failed: %s", type(exc).__name__)
+            return _json_error("学习设置暂时无法保存，请稍后重试。", 503)
+        if not settings:
+            return _json_error("账号信息暂时不可用，请重新登录。", 401)
+        return jsonify({"settings": settings})
+
+    @app.get("/api/learning/entries")
+    def learning_entries():
+        query = request.args.get("q", "").strip()
+        if len(query) > 100:
+            return _json_error("搜索内容不能超过 100 个字符。", 400)
+        try:
+            book_value = request.args.get("book", "").strip()
+            book = int(book_value) if book_value else None
+            if book is not None and book not in {1, 2, 3, 4}:
+                raise ValueError
+            page = max(1, min(int(request.args.get("page", "1")), 10000))
+        except ValueError:
+            return _json_error("册次或页码无效。", 400)
+        limit = 30
+        owner_id = session[SESSION_USER_KEY]
+        try:
+            repository = store()
+            items = repository.search_learning_entries(query, book, limit=limit, skip=(page - 1) * limit)
+            total = repository.count_learning_entries(query, book)
+            flags = repository.learning_entry_flags(owner_id, [item["id"] for item in items])
+        except Exception as exc:
+            app.logger.error("learning entries load failed: %s", type(exc).__name__)
+            return _json_error("已审核词库暂时无法读取，请稍后重试。", 503)
+        return jsonify({"entries": [{**item, **flags.get(item["id"], {"favorite": False, "learningActive": False})}
+                                    for item in items], "page": page, "pageSize": limit, "total": total})
+
+    @app.get("/api/learning/entries/<entry_id>")
+    def learning_entry(entry_id: str):
+        owner_id = session[SESSION_USER_KEY]
+        try:
+            repository = store()
+            entry = repository.find_learning_entry(entry_id)
+            if not entry:
+                return _json_error("没有找到可学习的已审核词条。", 404)
+            flags = repository.learning_entry_flags(owner_id, [entry_id]).get(
+                entry_id, {"favorite": False, "learningActive": False})
+            return jsonify({"entry": {**entry, **flags}})
+        except Exception as exc:
+            app.logger.error("learning entry load failed: %s", type(exc).__name__)
+            return _json_error("词条暂时无法读取，请稍后重试。", 503)
+
+    @app.post("/api/learning/entries/<entry_id>/favorite")
+    def learning_favorite(entry_id: str):
+        payload = request.get_json(silent=True)
+        favorite = payload.get("favorite") if isinstance(payload, dict) else None
+        if not isinstance(favorite, bool):
+            return _json_error("收藏状态无效。", 400)
+        try:
+            saved = store().update_learning_flag(session[SESSION_USER_KEY], entry_id, "favorite", favorite)
+        except Exception as exc:
+            app.logger.error("learning favorite update failed: %s", type(exc).__name__)
+            return _json_error("收藏状态暂时无法保存，请稍后重试。", 503)
+        if not saved:
+            return _json_error("没有找到可收藏的已审核词条。", 404)
+        return jsonify({"favorite": favorite})
+
+    @app.route("/api/learning/entries/<entry_id>/plan", methods=["POST", "DELETE"])
+    def learning_plan_entry(entry_id: str):
+        active = request.method == "POST"
+        try:
+            saved = store().update_learning_flag(session[SESSION_USER_KEY], entry_id, "learning_active", active)
+        except Exception as exc:
+            app.logger.error("learning plan update failed: %s", type(exc).__name__)
+            return _json_error("学习计划暂时无法更新，请稍后重试。", 503)
+        if not saved:
+            return _json_error("没有找到可学习的已审核词条。", 404)
+        return jsonify({"learningActive": active})
+
+    @app.post("/api/learning/review")
+    def learning_review():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _json_error("练习记录格式无效。", 400)
+        entry_id, rating, event_id = payload.get("entryId"), payload.get("rating"), payload.get("eventId")
+        if not isinstance(entry_id, str) or not entry_id or len(entry_id) > 160:
+            return _json_error("词条编号无效。", 400)
+        if rating not in {"remembered", "fuzzy", "forgot"}:
+            return _json_error("请选择记得、有点模糊或忘记了。", 400)
+        if not isinstance(event_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", event_id):
+            return _json_error("练习记录编号无效，请重新提交。", 400)
+        try:
+            result = store().record_learning_review(session[SESSION_USER_KEY], entry_id, rating, event_id)
+        except ValueError:
+            return _json_error("练习反馈无效。", 400)
+        except Exception as exc:
+            app.logger.error("learning review save failed: %s", type(exc).__name__)
+            return _json_error("练习结果暂时无法保存，请稍后重试。", 503)
+        if not result:
+            return _json_error("没有找到可练习的已审核词条。", 404)
+        progress = result["progress"]
+        return jsonify({"saved": True, "duplicate": result["duplicate"],
+                        "nextReviewAt": progress.get("next_review_at"),
+                        "intervalDays": progress.get("interval_days", 0),
+                        "dayComplete": result.get("dayComplete", progress.get("day_session_complete", True)),
+                        "repeatToday": result.get("repeatToday", False),
+                        "masterySuccesses": result.get("masterySuccesses", progress.get("day_session_successes", 0)),
+                        "masteryRequired": result.get("masteryRequired", progress.get("day_session_required", 0)),
+                        "initialRating": result.get("initialRating", progress.get("day_session_initial_rating"))})
+
+    @app.get("/api/learning/lists")
+    def learning_lists():
+        try:
+            return jsonify(store().list_learning_lists(session[SESSION_USER_KEY]))
+        except Exception as exc:
+            app.logger.error("learning lists load failed: %s", type(exc).__name__)
+            return _json_error("个人词单暂时无法读取，请稍后重试。", 503)
+
+    @app.post("/api/learning/lists")
+    def create_learning_list():
+        payload = request.get_json(silent=True)
+        title = payload.get("title") if isinstance(payload, dict) else None
+        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 40:
+            return _json_error("词单名称需为 1–40 个字符。", 400)
+        try:
+            item = store().create_learning_list(session[SESSION_USER_KEY], title.strip())
+            return jsonify({"list": item}), 201
+        except Exception as exc:
+            app.logger.error("learning list create failed: %s", type(exc).__name__)
+            return _json_error("词单暂时无法创建，请稍后重试。", 503)
+
+    @app.route("/api/learning/lists/<list_id>", methods=["PATCH", "DELETE"])
+    def update_or_delete_learning_list(list_id: str):
+        repository = store()
+        owner_id = session[SESSION_USER_KEY]
+        if request.method == "DELETE":
+            try:
+                deleted = repository.delete_learning_list(owner_id, list_id)
+            except Exception as exc:
+                app.logger.error("learning list delete failed: %s", type(exc).__name__)
+                return _json_error("词单暂时无法删除，请稍后重试。", 503)
+            return jsonify({"deleted": True}) if deleted else _json_error("词单不存在。", 404)
+        payload = request.get_json(silent=True)
+        title = payload.get("title") if isinstance(payload, dict) else None
+        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 40:
+            return _json_error("词单名称需为 1–40 个字符。", 400)
+        try:
+            renamed = repository.rename_learning_list(owner_id, list_id, title.strip())
+        except Exception as exc:
+            app.logger.error("learning list rename failed: %s", type(exc).__name__)
+            return _json_error("词单暂时无法修改，请稍后重试。", 503)
+        return jsonify({"title": title.strip()}) if renamed else _json_error("词单不存在。", 404)
+
+    @app.route("/api/learning/lists/<list_id>/entries/<entry_id>", methods=["POST", "DELETE"])
+    def update_learning_list_entry(list_id: str, entry_id: str):
+        try:
+            saved = store().update_learning_list_entry(
+                session[SESSION_USER_KEY], list_id, entry_id, request.method == "POST")
+        except Exception as exc:
+            app.logger.error("learning list entry update failed: %s", type(exc).__name__)
+            return _json_error("词单内容暂时无法更新，请稍后重试。", 503)
+        if not saved:
+            return _json_error("词单或已审核词条不存在。", 404)
+        return jsonify({"updated": True})
+
+    @app.post("/api/learning/batch-save")
+    def batch_save_learning_entries():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _json_error("批量保存内容格式无效。", 400)
+        action = payload.get("action")
+        entry_ids = payload.get("entryIds")
+        if action not in {"favorite", "list", "plan"}:
+            return _json_error("请选择加入收藏、学习计划或词单。", 400)
+        if (not isinstance(entry_ids, list) or not entry_ids or len(entry_ids) > 50
+                or any(not isinstance(item, str) or not item or len(item) > 160 for item in entry_ids)):
+            return _json_error("请选择 1–50 个有效词条。", 400)
+        list_id = payload.get("listId", "")
+        list_title = payload.get("listTitle", "")
+        if not isinstance(list_id, str) or not isinstance(list_title, str):
+            return _json_error("词单信息无效。", 400)
+        if action == "list":
+            if len(list_id) > 100:
+                return _json_error("词单编号无效。", 400)
+            if len(list_title.strip()) > 40:
+                return _json_error("主题名称不能超过 40 个字符。", 400)
+            if not list_id and not list_title.strip():
+                return _json_error("请选择已有词单或填写新主题名称。", 400)
+        try:
+            result = store().batch_save_learning_entries(
+                session[SESSION_USER_KEY], entry_ids, action=action,
+                list_id=list_id.strip(), list_title=list_title.strip(),
+            )
+        except ValueError:
+            return _json_error("批量保存操作无效。", 400)
+        except Exception as exc:
+            app.logger.error("learning batch save failed: %s", type(exc).__name__)
+            return _json_error("批量保存失败，请稍后重试。", 503)
+        if result.get("missingList"):
+            return _json_error("所选词单不存在或不属于当前账号，请刷新后重试。", 404)
+        return jsonify(result)
+
+    @app.get("/api/learning/stats")
+    def learning_stats():
+        try:
+            days = int(request.args.get("days", "7"))
+            if days not in {7, 30}:
+                raise ValueError
+        except ValueError:
+            return _json_error("统计周期只能为 7 天或 30 天。", 400)
+        try:
+            return jsonify(store().learning_stats(session[SESSION_USER_KEY], days))
+        except Exception as exc:
+            app.logger.error("learning stats load failed: %s", type(exc).__name__)
+            return _json_error("学习统计暂时无法读取，请稍后重试。", 503)
+
+    @app.get("/api/learning/stats/words")
+    def learning_stat_words():
+        category = request.args.get("category", "")
+        if category not in {"today", "learned", "remembered", "fuzzy", "forgot", "due"}:
+            return _json_error("统计分类无效。", 400)
+        try:
+            days = int(request.args.get("days", "7"))
+            if days not in {7, 30}:
+                raise ValueError
+        except ValueError:
+            return _json_error("统计周期只能为 7 天或 30 天。", 400)
+        try:
+            groups = store().learning_stat_words(session[SESSION_USER_KEY], category, days)
+            return jsonify({"category": category, "days": days, "groups": groups})
+        except Exception as exc:
+            app.logger.error("learning stat words failed: %s", type(exc).__name__)
+            return _json_error("对应词汇暂时无法读取，请稍后重试。", 503)
+
     @app.get("/api/terms")
     def all_terms():
         return jsonify({"terms": terms()})
@@ -796,66 +1187,139 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
         question = payload.get("question", "") if isinstance(payload, dict) else ""
         if not isinstance(question, str) or not question.strip() or len(question) > 500:
             return _json_error("请输入不超过 500 字的问题。", 400)
+        question = question.strip()
         try:
             repository = store()
-            use_vectors = bool(
-                _book_external_allowed() and _book_api_key()
-                and knowledge_index_name()
-            )
+            use_vectors = bool(_book_external_allowed() and _book_api_key() and knowledge_index_name())
             if use_vectors:
                 use_vectors = repository.has_knowledge_vector_index(knowledge_index_name())
         except Exception as exc:
             app.logger.error("book knowledge store unavailable: %s", type(exc).__name__)
             return _json_error("手语书籍资料暂不可用，请检查 Atlas 连接。", 503)
-        retrieval = "keyword"
+
         try:
-            exact_sources = repository.search_knowledge_exact(question.strip())
+            exact_sources = repository.search_knowledge_exact(question)
             if exact_sources:
-                sources = exact_sources
-                retrieval = "exact_title"
-            else:
-                sources = repository.search_knowledge_keywords(question.strip())
-                if sources:
-                    retrieval = "keyword"
-                elif use_vectors:
-                    vector = _book_embedding(question.strip())
-                    candidates = repository.search_knowledge_vectors(
-                        vector,
-                        knowledge_index_name(),
-                        limit=12,
+                answer = "\n\n".join(item["text"][:900] for item in exact_sources)
+                answer_mode = "原书词条"
+                if _book_external_allowed():
+                    try:
+                        answer = _qwen_book_answer(question, exact_sources)
+                        answer_mode = "Qwen 基于原文回答"
+                    except Exception as exc:
+                        app.logger.error("Qwen book answer failed: %s", type(exc).__name__)
+                        answer_mode = "原书内容（模型暂不可用）"
+                sources = [_public_knowledge_source(item) for item in exact_sources]
+                return jsonify({
+                    "knowledgeApiVersion": 2, "collection": knowledge_collection_name(),
+                    "retrieval": "exact_title", "intent": "term", "answerMode": answer_mode,
+                    "recommendationMode": "exact", "topic": "", "suggestedListTitle": "",
+                    "message": "已按词条标题精确匹配，展示全部对应词条。",
+                    "answer": answer, "sources": sources,
+                })
+
+            plan = _fallback_knowledge_plan(question)
+            plan_mode = "keyword_fallback"
+            if _book_external_allowed() and (os.environ.get("QWEN_API_KEY") or _book_api_key()):
+                try:
+                    plan = _qwen_knowledge_plan(question)
+                    plan_mode = "qwen"
+                except Exception as exc:
+                    app.logger.error("Qwen book query planning failed: %s", type(exc).__name__)
+
+            candidates: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+
+            def append_candidates(found):
+                for item in found:
+                    item_id = str(item.get("_id", ""))
+                    if item_id and item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        candidates.append(item)
+
+            search_terms = list(dict.fromkeys([question, *plan.get("search_terms", [])]))[:9]
+            retrieval_methods = []
+            if use_vectors:
+                vectors = _book_embeddings(search_terms[:5])
+                for vector in vectors:
+                    found = repository.search_knowledge_vectors(vector, knowledge_index_name(), limit=20)
+                    append_candidates([
+                        item for item in found
+                        if isinstance(item.get("score"), (int, float))
+                        and item["score"] >= min(_book_similarity_min_score(), 0.42)
+                    ])
+                if candidates:
+                    retrieval_methods.append("Atlas Vector Search")
+            for term in search_terms:
+                append_candidates(repository.search_knowledge_keywords(term, limit=12))
+            if candidates and not retrieval_methods:
+                retrieval_methods.append("Atlas 关键词检索")
+            candidates = candidates[:50]
+
+            if not candidates:
+                return jsonify({
+                    "knowledgeApiVersion": 2, "collection": knowledge_collection_name(),
+                    "retrieval": "none", "intent": plan.get("intent", "term"),
+                    "answerMode": "检索候选为空", "recommendationMode": plan_mode,
+                    "topic": plan.get("topic", ""), "suggestedListTitle": plan.get("list_title", ""),
+                    "message": "已审核词典中没有找到足够相关的词条。可以换个说法或试试单个词语。",
+                    "answer": "", "sources": [],
+                })
+
+            if plan.get("intent") == "scenario":
+                selected_ids = []
+                reasons = {}
+                recommendation_mode = "retrieved_candidates"
+                if _book_external_allowed() and (os.environ.get("QWEN_API_KEY") or _book_api_key()):
+                    try:
+                        selection = _qwen_select_knowledge(question, [_public_knowledge_source(item) for item in candidates],
+                                                           plan.get("topic", ""))
+                        selected_ids = [item["id"] for item in selection["items"]]
+                        reasons = {item["id"]: item["reason"] for item in selection["items"]}
+                        recommendation_mode = "qwen_curated"
+                    except Exception as exc:
+                        app.logger.error("Qwen book candidate selection failed: %s", type(exc).__name__)
+                if not selected_ids:
+                    lexical_matches = _keyword_scenario_candidates(
+                        [_public_knowledge_source(item) for item in candidates],
+                        plan.get("search_terms", []), plan.get("topic", ""),
                     )
-                    sources = [
-                        source for source in candidates
-                        if isinstance(source.get("score"), (int, float))
-                        and source["score"] >= _book_similarity_min_score()
-                    ][:3]
-                    retrieval = "similar" if sources else "atlas_vector"
+                    selected_ids = [item["id"] for item in lexical_matches]
+                    if recommendation_mode == "retrieved_candidates":
+                        recommendation_mode = "keyword_fallback"
+                selected_set = set(selected_ids)
+                sources = []
+                for item in candidates:
+                    source = _public_knowledge_source(item)
+                    if source["id"] not in selected_set:
+                        continue
+                    source["recommendationReason"] = reasons.get(source["id"], "与检索场景相关的已审核词条")
+                    sources.append(source)
+                answer = f"从已审核词典中筛出 {len(sources)} 个可能适用于“{plan.get('topic') or '该场景'}”的词条。请核对后勾选保存。"
+                if not sources:
+                    answer = "当前已审核词典中没有找到能明确对应这个场景的词条。可以换个场景说法，或搜索具体词语。"
+                return jsonify({
+                    "knowledgeApiVersion": 2, "collection": knowledge_collection_name(),
+                    "retrieval": "scenario", "intent": "scenario", "answerMode": recommendation_mode,
+                    "recommendationMode": recommendation_mode, "retrievalMethods": retrieval_methods,
+                    "topic": plan.get("topic", ""), "suggestedListTitle": plan.get("list_title", ""),
+                    "message": "下面仅列出已审核词典中的候选词；请核对后勾选保存。",
+                    "answer": answer, "sources": sources,
+                })
+
+            sources = [_public_knowledge_source(item) for item in candidates[:12]]
+            answer = "\n\n".join(f"{item['title']}：{item['text'][:500]}" for item in sources[:5])
+            return jsonify({
+                "knowledgeApiVersion": 2, "collection": knowledge_collection_name(),
+                "retrieval": "keyword", "intent": "term", "answerMode": "审核词条原文",
+                "recommendationMode": plan_mode, "topic": plan.get("topic", ""),
+                "suggestedListTitle": plan.get("list_title", ""),
+                "message": "未命中完全相同的词条标题，以下是相关的已审核词条。",
+                "answer": answer, "sources": sources,
+            })
         except Exception as exc:
             app.logger.error("book knowledge retrieval failed: %s", type(exc).__name__)
-            return _json_error("手语书籍检索暂时失败，请检查 Embedding 服务和 Atlas 向量索引配置。", 503)
-        answer = "\n\n".join(item["text"][:900] for item in sources)
-        answer_mode = "原文摘录"
-        if sources and _book_external_allowed():
-            try:
-                answer = _qwen_book_answer(question.strip(), sources)
-                answer_mode = "Qwen 基于检索原文生成"
-            except Exception as exc:
-                app.logger.error("Qwen book answer failed: %s", type(exc).__name__)
-                answer_mode = "原文摘录（模型暂不可用）"
-        return jsonify({
-            "knowledgeApiVersion": 2,
-            "collection": knowledge_collection_name(),
-            "retrieval": retrieval,
-            "answerMode": answer_mode,
-            "message": (
-                "已按词条标题精确匹配，展示全部对应词条。" if retrieval == "exact_title"
-                else "已根据 Atlas Vector Search 检索已审核资料。" if retrieval == "atlas_vector"
-                else "暂未找到该词汇，为您推荐以下相似词汇。" if retrieval == "similar"
-                else "当前使用 Atlas 中已审核资料的关键词检索。"
-            ) if sources else "当前已审核的书籍资料中没有找到相关内容。",
-            "answer": answer,
-            "sources": [_public_knowledge_source(item) for item in sources],
-        })
+            return _json_error("手语书籍检索暂时失败，请检查 Atlas、Embedding 服务和向量索引配置。", 503)
 
     @app.get("/videos/<path:filename>")
     def video(filename: str):

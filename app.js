@@ -4,12 +4,14 @@ import { RecognitionSession } from "./recognition_session.mjs";
 import { initializeCommunication, stopCommunicationListening } from "./communication_assistant.mjs";
 import { initializeSpeechOutput } from "./speech_output.mjs";
 import { initializeAuth } from "./auth_client.mjs";
+import { initializeLearning } from "./learning_client.mjs";
 
 const modes = {
   recognize: { title: "手语识别", description: "限定词表仅覆盖十个训练词；摄像头特征在本地提取。" },
   video: { title: "查手语视频", description: "输入词语查找对应的手语示范；尚未收录的表达会明确提示。" },
   knowledge: { title: "问手语知识", description: "检索国家通用手语词典的已审核内容，展示原文、书中图片和出处。" },
   communication: { title: "沟通助手", description: "实时查看口语转写，保存沟通记录，并按需整理重点或生成回复建议。" },
+  learning: { title: "手语学习", description: "按自己的节奏学习已审核词条，并用复习反馈安排下一次复习。" },
   profile: { title: "个人中心", description: "管理个人资料、偏好设置和账号安全。" },
 };
 
@@ -19,6 +21,7 @@ const recognizePanel = document.querySelector("#recognize-panel");
 const lookupPanel = document.querySelector("#lookup-panel");
 const communicationPanel = document.querySelector("#communication-panel");
 const profilePanel = document.querySelector("#profile-panel");
+const learningPanel = document.querySelector("#learning-panel");
 const termList = document.querySelector("#term-list");
 const input = document.querySelector("#query-input");
 const feedback = document.querySelector("#query-feedback");
@@ -29,6 +32,10 @@ const API_BASE = window.SIGN_API_BASE || ( ["8000", "8080"].includes(location.po
 const KNOWLEDGE_HISTORY_KEY = "linguang.knowledge-search.v1";
 const KNOWLEDGE_HISTORY_LIMIT = 20;
 const KNOWLEDGE_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
+let knowledgeSources = [];
+let knowledgeListsLoaded = false;
+let knowledgeLists = [];
+let appToastTimer = null;
 let currentMode = "recognize";
 let cameraStream;
 let recognition;
@@ -48,6 +55,17 @@ let frameBuffer = [];
 let stableLabel = null;
 let noHandWindowCleared = false;
 let activePredictionController = null;
+
+function showAppToast(message) {
+  const toast = document.querySelector("#app-toast");
+  if (!toast || !message) return;
+  clearTimeout(appToastTimer);
+  toast.textContent = message;
+  toast.classList.add("is-visible");
+  appToastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
+}
+
+window.linguangToast = showAppToast;
 let lastRecognitionRenderAt = 0;
 const predictionSmoother = new PredictionSmoother({ windowSize: 3, majority: 2, lockMs: 1500 });
 const recognitionSession = new RecognitionSession({ noHandResetMs: 500, maxHistory: 30 });
@@ -71,11 +89,12 @@ function setMode(mode) {
   document.querySelector("#lookup-aside").classList.toggle("hidden", mode === "knowledge");
   communicationPanel.classList.toggle("hidden", mode !== "communication");
   profilePanel.classList.toggle("hidden", mode !== "profile");
+  learningPanel.classList.toggle("hidden", mode !== "learning");
   document.querySelector("#page-title").textContent = modes[mode].title;
   document.querySelector("#page-description").textContent = modes[mode].description;
   document.querySelector("#breadcrumb-current").textContent = modes[mode].title;
-  document.querySelector("#page-eyebrow-detail").textContent = mode === "communication" ? "实时字幕与记录" : mode === "profile" ? "账号与偏好" : "限定词表";
-  document.querySelector(".scope-chip").classList.toggle("hidden", mode === "profile");
+  document.querySelector("#page-eyebrow-detail").textContent = mode === "communication" ? "实时字幕与记录" : mode === "profile" ? "账号与偏好" : mode === "learning" ? "个人学习计划" : "限定词表";
+  document.querySelector(".scope-chip").classList.toggle("hidden", mode === "profile" || mode === "learning");
   document.querySelector("#result-label").textContent = mode === "video" ? "词条匹配" : "资料检索";
   document.querySelector("#aside-title").textContent = mode === "video" ? "词条状态" : "资料范围";
   document.querySelector("#aside-copy").textContent = mode === "video"
@@ -88,14 +107,15 @@ function setMode(mode) {
   feedback.textContent = "";
   if (isLookup && result.querySelector(".lookup-empty")) input.focus();
   if (mode === "knowledge") loadKnowledgeStatus();
+  if (mode === "learning") window.linguangLearning?.open();
 }
 
 navItems.forEach((item) => item.addEventListener("click", () => {
-  if (item.dataset.mode === "communication" && !window.linguangAuth?.requireLogin()) return;
+  if (!window.linguangAuth?.requireLogin(item.dataset.mode)) return;
   setMode(item.dataset.mode);
 }));
 modeButtons.forEach((item) => item.addEventListener("click", () => {
-  if (item.dataset.mode === "communication" && !window.linguangAuth?.requireLogin()) return;
+  if (!window.linguangAuth?.requireLogin(item.dataset.mode)) return;
   setMode(item.dataset.mode);
 }));
 
@@ -554,6 +574,16 @@ function renderBookSources(sources) {
     body.className = "book-source-body";
     const content = document.createElement("div");
     content.className = "book-source-content";
+    const selection = document.createElement("label");
+    selection.className = "book-source-select";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = source.id || "";
+    checkbox.dataset.knowledgeEntryId = source.id || "";
+    checkbox.disabled = !source.id;
+    checkbox.setAttribute("aria-label", `选择词条：${source.title || "词条"}`);
+    checkbox.addEventListener("change", updateKnowledgeSelection);
+    selection.append(checkbox, document.createTextNode("选择"));
     const heading = document.createElement("strong");
     heading.textContent = source.title || "词条片段";
     const tags = document.createElement("div");
@@ -570,7 +600,13 @@ function renderBookSources(sources) {
     }
     const text = document.createElement("p");
     text.textContent = source.text;
-    content.append(heading, tags, text);
+    content.append(selection, heading, tags, text);
+    if (source.recommendationReason) {
+      const reason = document.createElement("p");
+      reason.className = "book-source-reason";
+      reason.textContent = `推荐原因：${source.recommendationReason}`;
+      content.append(reason);
+    }
     const images = document.createElement("div");
     images.className = "book-source-images";
     for (const imageUrl of source.images || []) {
@@ -586,7 +622,107 @@ function renderBookSources(sources) {
     item.append(body);
     list.append(item);
   }
+  const toolbar = document.querySelector("#knowledge-selection-toolbar");
+  toolbar.classList.toggle("hidden", sources.length === 0);
+  document.querySelector("#knowledge-select-all").checked = false;
+  document.querySelector("#knowledge-save-status").textContent = "";
+  knowledgeSources = sources;
+  updateKnowledgeSelection();
 }
+
+function updateKnowledgeSelection() {
+  const boxes = [...document.querySelectorAll("[data-knowledge-entry-id]")];
+  const selected = boxes.filter((box) => box.checked && box.value).length;
+  document.querySelector("#knowledge-selected-count").textContent = `已选 ${selected} 个词`;
+  document.querySelector("#knowledge-select-all").checked = boxes.length > 0 && selected === boxes.filter((box) => box.value).length;
+  document.querySelector("#knowledge-add-favorites").disabled = selected === 0;
+  document.querySelector("#knowledge-add-today-plan").disabled = selected === 0;
+  document.querySelector("#knowledge-add-list").disabled = selected === 0 || !document.querySelector("#knowledge-list-select").value;
+  document.querySelector("#knowledge-create-topic-list").disabled = selected === 0 || !document.querySelector("#knowledge-new-list-title").value.trim();
+}
+
+function selectedKnowledgeIds() {
+  return [...document.querySelectorAll("[data-knowledge-entry-id]:checked")]
+    .map((box) => box.value).filter(Boolean);
+}
+
+async function loadKnowledgeLists() {
+  const auth = window.linguangAuth;
+  if (!auth?.requireLogin("knowledge")) return false;
+  const select = document.querySelector("#knowledge-list-select");
+  if (!knowledgeListsLoaded) {
+    const data = await window.linguangRequest("/api/learning/lists");
+    knowledgeLists = data.lists || [];
+    knowledgeListsLoaded = true;
+  }
+  const selectedValue = select.value;
+  select.replaceChildren(new Option("选择已有词单…", ""));
+  knowledgeLists.forEach((item) => select.append(new Option(`${item.title}（${item.entries.length}）`, item.id)));
+  select.value = knowledgeLists.some((item) => item.id === selectedValue) ? selectedValue : "";
+  updateKnowledgeSelection();
+  return true;
+}
+
+async function saveSelectedKnowledge(action, listId = "", listTitle = "") {
+  if (!selectedKnowledgeIds().length) return;
+  if (!window.linguangAuth?.requireLogin("knowledge")) return;
+  const button = action === "favorite" ? document.querySelector("#knowledge-add-favorites")
+    : action === "plan" ? document.querySelector("#knowledge-add-today-plan")
+    : listTitle ? document.querySelector("#knowledge-create-topic-list") : document.querySelector("#knowledge-add-list");
+  const status = document.querySelector("#knowledge-save-status");
+  const selected = selectedKnowledgeIds();
+  button.disabled = true;
+  status.textContent = "正在保存…";
+  try {
+    const result = await window.linguangRequest("/api/learning/batch-save", {
+      method: "POST",
+      body: JSON.stringify({ action, entryIds: selected, listId, listTitle }),
+    });
+    status.textContent = action === "favorite"
+      ? `已收藏 ${result.added} 个${result.alreadyPresent ? `，${result.alreadyPresent} 个此前已收藏` : ""}${result.skipped ? `，跳过 ${result.skipped} 个不可用词条` : ""}。`
+      : action === "plan"
+        ? `已加入今日学习计划 ${result.added} 个${result.alreadyPresent ? `，${result.alreadyPresent} 个原已在计划中` : ""}${result.skipped ? `，跳过 ${result.skipped} 个不可用词条` : ""}。前往“手语学习”并刷新计划即可开始。`
+      : `已将 ${result.added} 个词加入“${result.listTitle}”${result.alreadyPresent ? `，${result.alreadyPresent} 个已在词单中` : ""}。`;
+    const toastMessage = action === "favorite"
+      ? `已加入收藏 ${result.added} 个词${result.alreadyPresent ? `，${result.alreadyPresent} 个已收藏` : ""}`
+      : action === "plan"
+        ? `已加入今日学习计划 ${result.added} 个词${result.alreadyPresent ? `，${result.alreadyPresent} 个已在计划中` : ""}`
+        : `已加入词单“${result.listTitle}” ${result.added} 个词${result.alreadyPresent ? `，${result.alreadyPresent} 个已存在` : ""}`;
+    showAppToast(toastMessage);
+    if (action === "list" && listTitle) {
+      knowledgeListsLoaded = false;
+      document.querySelector("#knowledge-new-list-title").value = "";
+      await loadKnowledgeLists();
+      document.querySelector("#knowledge-list-select").value = result.listId;
+    }
+    selected.forEach((id) => {
+      const source = knowledgeSources.find((item) => item.id === id);
+      if (source && action === "favorite") source.favorite = true;
+    });
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    updateKnowledgeSelection();
+  }
+}
+
+document.querySelector("#knowledge-select-all").addEventListener("change", (event) => {
+  document.querySelectorAll("[data-knowledge-entry-id]").forEach((box) => { box.checked = event.currentTarget.checked; });
+  updateKnowledgeSelection();
+});
+document.querySelector("#knowledge-add-favorites").addEventListener("click", () => saveSelectedKnowledge("favorite"));
+document.querySelector("#knowledge-add-today-plan").addEventListener("click", () => saveSelectedKnowledge("plan"));
+document.querySelector("#knowledge-list-select").addEventListener("focus", () => {
+  loadKnowledgeLists().catch((error) => { document.querySelector("#knowledge-save-status").textContent = error.message; });
+});
+document.querySelector("#knowledge-list-select").addEventListener("change", updateKnowledgeSelection);
+document.querySelector("#knowledge-add-list").addEventListener("click", () => {
+  saveSelectedKnowledge("list", document.querySelector("#knowledge-list-select").value);
+});
+document.querySelector("#knowledge-new-list-title").addEventListener("input", updateKnowledgeSelection);
+document.querySelector("#knowledge-create-topic-list").addEventListener("click", () => {
+  saveSelectedKnowledge("list", "", document.querySelector("#knowledge-new-list-title").value.trim());
+});
 
 function readKnowledgeHistory() {
   try {
@@ -645,13 +781,19 @@ function saveKnowledgeHistory(query, data) {
     message: data.message,
     answerMode: data.answerMode,
     answer: data.answer,
+    intent: data.intent,
+    topic: data.topic,
+    suggestedListTitle: data.suggestedListTitle,
+    recommendationMode: data.recommendationMode,
     sources: (data.sources || []).map((source) => ({
+      id: source.id,
       title: source.title,
       book: source.book,
       page: source.page,
       sourceFile: source.sourceFile,
       text: source.text,
       images: source.images || [],
+      recommendationReason: source.recommendationReason || "",
     })),
   };
   const key = query.toLocaleLowerCase().replace(/\s+/g, "");
@@ -669,12 +811,17 @@ function saveKnowledgeHistory(query, data) {
 function showKnowledgeResult(data, { cachedAt = null } = {}) {
   const status = document.querySelector("#book-question-status");
   const answer = document.querySelector("#book-answer");
-  const retrievalLabel = data.retrieval === "exact_title" ? "词条精确匹配"
+  const retrievalLabel = data.retrieval === "scenario" ? "场景候选筛选"
+    : data.retrieval === "exact_title" ? "词条精确匹配"
     : data.retrieval === "similar" ? "相似词推荐"
-      : data.retrieval === "atlas_vector" ? "Atlas Vector Search" : "关键词";
+    : data.retrieval === "atlas_vector" ? "Atlas Vector Search" : "关键词";
   status.textContent = cachedAt
     ? `${data.message} 检索方式：${retrievalLabel}；已打开本地缓存结果。`
     : `${data.message} 检索方式：${retrievalLabel}；${data.answerMode || ""}`;
+  const topicInput = document.querySelector("#knowledge-new-list-title");
+  if (data.intent === "scenario" && data.suggestedListTitle && !topicInput.value.trim()) {
+    topicInput.value = data.suggestedListTitle;
+  }
   if (data.answer) {
     answer.textContent = data.answer;
     answer.classList.remove("hidden");
@@ -881,13 +1028,19 @@ renderKnowledgeHistory();
 checkModel();
 initializeSpeechOutput();
 let communicationInitialized = false;
+let learningInitialized = false;
 window.linguangNavigate = setMode;
 initializeAuth({
   apiBase: API_BASE,
+  requireLoginAtStart: true,
   onAuthenticated: (_user, newlyAuthenticated, destination) => {
     if (!communicationInitialized) {
       communicationInitialized = true;
       initializeCommunication({ apiBase: API_BASE });
+    }
+    if (!learningInitialized) {
+      learningInitialized = true;
+      initializeLearning({ apiBase: API_BASE });
     }
     if (newlyAuthenticated) setMode(destination || "communication");
   },

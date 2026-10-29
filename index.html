@@ -18,9 +18,10 @@
         <div class="side-label">工作区</div>
         <nav class="nav-list" aria-label="工作区">
           <button class="nav-item active" data-mode="recognize"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="6" width="13" height="12" rx="2"/><path d="m16.5 10 4-2v8l-4-2z"/></svg></span><span>手语识别</span><kbd>01</kbd></button>
-          <button class="nav-item" data-mode="video"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="m10 9 5 3-5 3z"/></svg></span><span>查手语视频</span><kbd>02</kbd></button>
-          <button class="nav-item" data-mode="knowledge"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5c3.3-.8 5.9-.3 8 1.4v12c-2.1-1.7-4.7-2.2-8-1.4zM20 5.5c-3.3-.8-5.9-.3-8 1.4v12c2.1-1.7 4.7-2.2 8-1.4z"/><path d="M12 7v12"/></svg></span><span>问手语知识</span><kbd>03</kbd></button>
-          <button class="nav-item" data-mode="communication"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l1.5-3A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8.5 11.5h7"/></svg></span><span>沟通助手</span><kbd>04</kbd></button>
+          <button class="nav-item" data-mode="learning"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5c3.3-.8 5.9-.3 8 1.4v12c-2.1-1.7-4.7-2.2-8-1.4zM20 5.5c-3.3-.8-5.9-.3-8 1.4v12c2.1-1.7 4.7-2.2 8-1.4z"/><path d="M12 7v12"/></svg></span><span>手语学习</span><kbd>02</kbd></button>
+          <button class="nav-item" data-mode="video"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="m10 9 5 3-5 3z"/></svg></span><span>查手语视频</span><kbd>03</kbd></button>
+          <button class="nav-item" data-mode="knowledge"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5c3.3-.8 5.9-.3 8 1.4v12c-2.1-1.7-4.7-2.2-8-1.4zM20 5.5c-3.3-.8-5.9-.3-8 1.4v12c2.1-1.7 4.7-2.2 8-1.4z"/><path d="M12 7v12"/></svg></span><span>问手语知识</span><kbd>04</kbd></button>
+          <button class="nav-item" data-mode="communication"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l1.5-3A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8.5 11.5h7"/></svg></span><span>沟通助手</span><kbd>05</kbd></button>
           <button class="nav-item" data-mode="profile"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg></span><span>个人中心</span></button>
         </nav>
         <div class="sidebar-bottom">
@@ -112,8 +113,8 @@
 
           <section class="workspace lookup-workspace hidden" id="lookup-panel">
             <section id="book-knowledge-panel" class="book-knowledge-panel hidden" aria-label="手语书籍知识问答">
-              <div class="book-knowledge-heading"><div><div class="section-kicker">国家通用手语词典 <span class="kicker-rule"></span></div><h2>问手语知识</h2><p>答案只依据已审核的书籍内容，并显示原文、图片和出处。</p></div><span id="knowledge-mode-badge" class="demo-tag">检索状态读取中</span></div>
-              <form id="book-question-form" class="book-question-form"><label class="sr-only" for="book-question">询问手语书籍内容</label><input id="book-question" maxlength="500" placeholder="例如：谢谢这个词的动作怎么做？" autocomplete="off"><button class="button button-primary" type="submit">提问 <span aria-hidden="true">→</span></button></form>
+              <div class="book-knowledge-heading"><div><div class="section-kicker">国家通用手语词典 <span class="kicker-rule"></span></div><h2>问手语知识</h2><p>查单个词，或按场景发现相关词汇；候选词来自已审核词典，可勾选后批量加入学习。</p></div><span id="knowledge-mode-badge" class="demo-tag">检索状态读取中</span></div>
+              <form id="book-question-form" class="book-question-form"><label class="sr-only" for="book-question">询问手语书籍内容或输入使用场景</label><input id="book-question" maxlength="500" placeholder="例如：医院里会用到哪些词？或：谢谢怎么做？" autocomplete="off"><button class="button button-primary" type="submit">查找 <span aria-hidden="true">→</span></button></form>
               <p id="book-question-status" class="query-feedback" role="status" aria-live="polite"></p>
               <section class="knowledge-search-history" aria-labelledby="knowledge-history-title">
                 <div class="knowledge-search-history-head"><h3 id="knowledge-history-title">最近搜索</h3><button id="knowledge-history-clear" class="text-button" type="button">清空</button></div>
@@ -121,6 +122,17 @@
                 <p id="knowledge-search-history-empty" class="knowledge-search-history-empty">还没有搜索记录</p>
               </section>
               <div id="book-answer" class="book-answer hidden"></div>
+              <section id="knowledge-selection-toolbar" class="knowledge-selection-toolbar hidden" aria-label="批量保存已选词条">
+                <div class="knowledge-selection-heading"><label class="knowledge-select-all"><input id="knowledge-select-all" type="checkbox"><span>全选</span></label><strong id="knowledge-selected-count">已选 0 个词</strong><span id="knowledge-save-status" role="status" aria-live="polite"></span></div>
+                <div class="knowledge-selection-actions">
+                  <button id="knowledge-add-favorites" class="button button-secondary" type="button" disabled>加入收藏</button>
+                  <button id="knowledge-add-today-plan" class="button button-primary" type="button" disabled>加入今日学习计划</button>
+                  <label class="sr-only" for="knowledge-list-select">选择已有词单</label><select id="knowledge-list-select" aria-label="选择已有词单"><option value="">选择已有词单…</option></select>
+                  <button id="knowledge-add-list" class="button button-secondary" type="button" disabled>加入词单</button>
+                  <label class="sr-only" for="knowledge-new-list-title">新主题词单名称</label><input id="knowledge-new-list-title" maxlength="40" placeholder="新主题，如：医院场景">
+                  <button id="knowledge-create-topic-list" class="button button-primary" type="button" disabled>新建词单并加入</button>
+                </div>
+              </section>
               <ol id="book-sources" class="book-sources"></ol>
               <details class="book-review-details"><summary>导入与审核状态</summary><p id="book-import-status">尚未读取导入状态。</p><a href="/book_review_report.json" target="_blank" rel="noreferrer">查看本地待复核清单</a></details>
             </section>
@@ -156,6 +168,54 @@
               <div class="aside-stat"><span>可播放视频</span><strong class="muted-stat">0</strong></div>
               <div class="aside-note"><span aria-hidden="true">↗</span>视频和词条数据由 data/sign-entries.json 统一管理。</div>
             </aside>
+          </section>
+
+          <section class="learning-page hidden" id="learning-panel" aria-label="手语学习">
+            <nav class="learning-tabs" role="tablist" aria-label="学习页面">
+              <button class="learning-tab active" id="learning-tab-today" type="button" role="tab" aria-selected="true" data-learning-view="today">今日学习</button>
+              <button class="learning-tab" id="learning-tab-library" type="button" role="tab" aria-selected="false" data-learning-view="library">已学词条</button>
+              <button class="learning-tab" id="learning-tab-favorites" type="button" role="tab" aria-selected="false" data-learning-view="favorites">我的收藏</button>
+              <button class="learning-tab" id="learning-tab-lists" type="button" role="tab" aria-selected="false" data-learning-view="lists">我的词单</button>
+              <button class="learning-tab" id="learning-tab-stats" type="button" role="tab" aria-selected="false" data-learning-view="stats">学习统计</button>
+            </nav>
+            <p id="learning-status" class="learning-status" role="status" aria-live="polite"></p>
+            <section class="learning-view" id="learning-today-view" role="tabpanel" aria-labelledby="learning-tab-today">
+              <div class="learning-overview">
+                <div><span class="learning-label">今天</span><strong id="learning-today-date">--</strong></div>
+                <div><span class="learning-label">连续学习</span><strong><span id="learning-streak">0</span> 天</strong></div>
+                <div><span class="learning-label">今天已完成</span><strong id="learning-completed">0</strong></div>
+                <label class="learning-target">每日新词
+                  <select id="learning-daily-target" aria-label="每日新词数量"><option value="3">3 个</option><option value="5">5 个</option><option value="10">10 个</option></select>
+                </label>
+              </div>
+              <div class="learning-session-heading"><div><h2>今天要学</h2><p id="learning-queue-summary">正在读取今日计划…</p></div><button id="learning-refresh" class="button button-secondary" type="button">刷新计划</button></div>
+              <div id="learning-card-area" class="learning-card-area"></div>
+              <div id="learning-queue-empty" class="learning-empty hidden"><strong>今天的学习完成了</strong><p>可以去手语词典收藏新词，或查看学习统计。</p></div>
+            </section>
+            <section class="learning-view hidden" id="learning-library-view" role="tabpanel">
+              <div class="learning-section-heading"><div><h2>已学词条</h2><p>按首次学习日期回顾学过的词；点击右侧箭头查看大字说明和原图。</p></div></div>
+              <div id="learning-entry-list" class="learning-learned-groups"></div>
+            </section>
+            <section class="learning-view hidden" id="learning-lists-view" role="tabpanel">
+              <div class="learning-section-heading"><div><h2>我的词单</h2><p>把想练习的词语按主题整理起来。</p></div><button id="learning-create-list" class="button button-primary" type="button">＋ 新建词单</button></div>
+              <div id="learning-custom-lists" class="learning-custom-lists"></div>
+            </section>
+            <section class="learning-view hidden" id="learning-favorites-view" role="tabpanel" aria-labelledby="learning-tab-favorites">
+              <div class="learning-section-heading"><div><h2>我的收藏</h2><p>按收藏日期浏览；收藏与词单分别管理。</p></div></div>
+              <div id="learning-favorites" class="learning-favorites-list"></div>
+            </section>
+            <section class="learning-view hidden" id="learning-stats-view" role="tabpanel">
+              <div class="learning-section-heading"><div><h2>学习统计</h2><p>根据你提交的复习反馈统计，不代表完整掌握程度。</p></div><div class="learning-range" role="group" aria-label="统计周期"><button type="button" class="active" data-stats-days="7" aria-pressed="true">近 7 天</button><button type="button" data-stats-days="30" aria-pressed="false">近 30 天</button></div></div>
+              <div id="learning-stat-totals" class="learning-stat-totals"></div>
+              <section id="learning-stat-details" class="learning-stat-details hidden" aria-live="polite"><button id="learning-stat-detail-close" class="text-button learning-stat-detail-close hidden" type="button">收起</button><div id="learning-stat-detail-content"></div></section>
+              <div class="learning-chart-section"><h3>每日练习</h3><div id="learning-chart" class="learning-chart" role="img" aria-label="每日练习次数"></div></div>
+              <div class="learning-list-group"><h3>需要多复习</h3><div id="learning-hard-words" class="learning-hard-words"></div></div>
+            </section>
+          </section>
+
+          <section id="learning-entry-page" class="learning-entry-page hidden" aria-labelledby="learning-detail-title">
+            <header class="learning-entry-page-head"><button id="learning-detail-back" class="button button-secondary" type="button"><span aria-hidden="true">←</span> 返回列表</button><span>手语词条</span></header>
+            <article id="learning-entry-detail" class="learning-entry-detail"><div class="learning-loading">正在读取词条…</div></article>
           </section>
 
           <section class="workspace communication-workspace hidden" id="communication-panel" aria-label="沟通助手">
@@ -355,6 +415,7 @@
       <button id="response-display-close" class="response-display-close" type="button" aria-label="关闭大字展示">×</button>
       <p id="response-display-text"></p>
     </div>
+    <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true"></div>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
