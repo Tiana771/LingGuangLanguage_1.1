@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell recognize-mode">
       <aside class="sidebar">
         <a class="brand" href="./" aria-label="聆光手语首页">
           <img class="brand-mark" src="./assets/linguang-mark.svg" alt="">
@@ -31,12 +31,14 @@
       </aside>
 
       <main class="main-content">
+        <div class="ambient-willow" aria-hidden="true">
+          <img src="./assets/willow-canopy.svg" alt="" draggable="false" fetchpriority="low">
+        </div>
         <header class="topbar">
           <a class="mobile-brand" href="./" aria-label="聆光手语首页"><img class="brand-mark" src="./assets/linguang-mark.svg" alt=""><strong>聆光手语</strong></a>
           <div class="breadcrumb">工作区 <span>/</span> <strong id="breadcrumb-current">手语识别</strong></div>
           <div class="topbar-tools">
             <button class="account-control" id="account-control" type="button" aria-label="登录或打开个人中心"><span class="account-avatar" id="account-avatar" aria-hidden="true">◉</span><span id="account-name">登录 / 注册</span></button>
-            <div class="topbar-status"><i></i>本地演示模式</div>
           </div>
         </header>
 
@@ -45,9 +47,8 @@
             <div>
               <p class="eyebrow">无障碍沟通工具 <span class="eyebrow-line"></span> <span id="page-eyebrow-detail">限定词表</span></p>
               <h1 id="page-title">手语识别</h1>
-              <p class="page-description" id="page-description">限定词表仅覆盖十个训练词，摄像头特征在本地提取。</p>
+              <p class="page-description" id="page-description">在画面中比划，查看系统识别到的手语词汇。</p>
             </div>
-            <div class="scope-chip"><span></span>仅覆盖已审核词条</div>
           </section>
 
           <section class="workspace" id="recognize-panel">
@@ -58,7 +59,7 @@
                 <div class="camera-placeholder" id="camera-placeholder">
                   <div class="camera-symbol"><span></span></div>
                   <strong id="camera-title">摄像头尚未开启</strong>
-                  <p id="camera-copy">允许摄像头访问后，在本地提取双手关键点并识别。</p>
+                  <p id="camera-copy">面对摄像头比划，系统会尝试识别词汇。</p>
                   <button class="button button-primary" id="camera-start"><span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="6" width="13" height="12" rx="2"/><path d="m16.5 10 4-2v8l-4-2z"/></svg></span> 开启摄像头</button>
                 </div>
                 <div class="camera-top-label"><span class="live-dot"></span><span id="camera-state">预览未启动</span></div>
@@ -66,7 +67,6 @@
                 <div class="camera-corner camera-corner-bl"></div><div class="camera-corner camera-corner-br"></div>
               </div>
               <div class="camera-foot">
-                <span><i class="small-dot"></i>画面本地处理，特征发送至本机 API</span>
                 <button class="text-button" id="camera-stop" disabled>关闭摄像头</button>
               </div>
             </div>
@@ -74,7 +74,7 @@
               <div class="section-kicker">识别结果 <span class="kicker-rule"></span></div>
               <div class="model-status">
                 <div class="status-icon">!</div>
-                <div><strong id="model-status-title">正在检查模型与 API</strong><p id="model-status-copy">手部关键点在浏览器本地提取。</p></div>
+                <div><strong id="model-status-title">正在检查识别功能</strong></div>
               </div>
               <div class="result-empty">
                 <div class="waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -150,7 +150,7 @@
               </form>
               <div class="query-hint" id="query-hint">语音会先转成可编辑文字，再由你确认查询。</div>
               <div id="query-feedback" class="query-feedback" role="status" aria-live="polite"></div>
-              <div class="result-heading"><div class="section-kicker" id="result-label">词条匹配</div><span class="demo-tag">本地演示数据</span></div>
+              <div class="result-heading"><div class="section-kicker" id="result-label">词条匹配</div></div>
               <div id="lookup-result" class="lookup-result">
                 <div class="lookup-empty"><span class="empty-search">⌕</span><strong>输入词语开始查询</strong><p>输入词语或句子，查看已审核的文字说明和示范视频。</p></div>
               </div>
@@ -159,15 +159,6 @@
                 <div class="term-list" id="term-list"></div>
               </div>
             </div>
-            <aside class="lookup-aside" id="lookup-aside">
-              <div class="aside-heading"><span class="aside-mark">i</span><span id="aside-title">词条状态</span></div>
-              <p id="aside-copy">词条说明和视频来自本地已审核资料；未收录内容会明确提示。</p>
-              <div class="aside-divider"></div>
-              <div class="aside-stat"><span>候选词条</span><strong id="term-count">10</strong></div>
-              <div class="aside-stat"><span>已审核</span><strong class="muted-stat">0</strong></div>
-              <div class="aside-stat"><span>可播放视频</span><strong class="muted-stat">0</strong></div>
-              <div class="aside-note"><span aria-hidden="true">↗</span>视频和词条数据由 data/sign-entries.json 统一管理。</div>
-            </aside>
           </section>
 
           <section class="learning-page hidden" id="learning-panel" aria-label="手语学习">
@@ -327,7 +318,7 @@
                     <input id="history-assistant-question" maxlength="500" placeholder="例如：上次约图书馆是什么时候？" autocomplete="off">
                     <button class="button button-primary" id="history-assistant-submit" type="submit">查找</button>
                   </form>
-                  <p class="history-assistant-disclosure">当前使用沟通原文关键词检索；语义向量检索需配置 Atlas Vector Search 和 Embedding 服务。</p>
+                  <p class="history-assistant-disclosure">仅查找当前账号保存的沟通记录，并展示相关原文。</p>
                   <div id="history-assistant-status" class="history-assistant-status" role="status" aria-live="polite"></div>
                   <div id="history-assistant-answer" class="history-assistant-answer hidden"></div>
                   <ol id="history-assistant-sources" class="history-assistant-sources"></ol>

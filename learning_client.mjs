@@ -5,6 +5,7 @@ let todayQueue = [];
 let cardIndex = 0;
 let statsDays = 7;
 let detailReturnScrollY = 0;
+let detailReturnLabel = "返回学习";
 
 const $ = (selector) => document.querySelector(selector);
 const status = () => $("#learning-status");
@@ -139,15 +140,24 @@ function renderWordRow(entry, options = {}) {
 async function openEntryDetail(entry, { favorite = false, listId = "" } = {}) {
   const page = $("#learning-entry-page");
   detailReturnScrollY = window.scrollY;
+  detailReturnLabel = favorite ? "返回我的收藏"
+    : listId ? "返回我的词单"
+      : activeView === "library" ? "返回已学词条"
+        : activeView === "stats" ? "返回学习统计" : "返回今日学习";
+  $("#learning-detail-back").replaceChildren(element("span", "", "←"), document.createTextNode(` ${detailReturnLabel}`));
   $("#learning-panel").classList.add("hidden");
   page.classList.remove("hidden");
+  page.scrollTop = 0;
   const panel = $("#learning-entry-detail");
   panel.replaceChildren(element("div", "learning-loading", "正在读取词条详情…"));
-  window.scrollTo(0, 0);
   try {
     const data = entry.text && Array.isArray(entry.images) ? { entry } : await request(`/api/learning/entries/${encodeURIComponent(entry.id)}`);
     const fullEntry = data.entry || entry;
     panel.replaceChildren();
+    const back = element("button", "learning-detail-back-inline", `← ${detailReturnLabel}`);
+    back.type = "button";
+    back.addEventListener("click", returnFromEntryDetail);
+    panel.append(back);
     const title = element("h2", "learning-detail-title", fullEntry.title || entry.title);
     title.id = "learning-detail-title";
     panel.append(title);
@@ -183,6 +193,7 @@ async function openEntryDetail(entry, { favorite = false, listId = "" } = {}) {
     const close = element("button", "button button-primary", "返回列表");
     close.type = "button";
     close.addEventListener("click", returnFromEntryDetail);
+    actions.append(close);
     panel.append(actions);
   } catch (error) {
     panel.replaceChildren(element("div", "learning-empty", error.message));
@@ -190,7 +201,8 @@ async function openEntryDetail(entry, { favorite = false, listId = "" } = {}) {
 }
 
 function returnFromEntryDetail() {
-  $("#learning-entry-page").classList.add("hidden");
+  const page = $("#learning-entry-page");
+  page.classList.add("hidden");
   $("#learning-panel").classList.remove("hidden");
   window.scrollTo(0, detailReturnScrollY);
 }

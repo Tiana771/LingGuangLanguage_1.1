@@ -79,7 +79,7 @@ h1{font-size:26px;line-height:1.25;margin:0;font-weight:600;letter-spacing:0}
 .pipeline{margin-top:24px}.pipeline .section-kicker{margin-bottom:10px}
 .pipeline-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #eff2f0;font-size:10px;color:#65736d}
 .step-number{font:9px "DM Mono",monospace;color:#a1ada7}.step-state{margin-left:auto;color:#a4aea9;font-size:9px;font-weight:400}
-.lookup-workspace{grid-template-columns:minmax(0,1fr) 235px;gap:28px;padding:25px}
+.lookup-workspace{grid-template-columns:minmax(0,1fr);gap:28px;padding:25px}
 .hidden{display:none!important}
 .mode-switch{display:flex;gap:19px;border-bottom:1px solid var(--line);margin-bottom:18px}
 .mode-button{position:relative;background:none;border:0;color:#89958f;padding:0 0 12px;font-size:11px}
@@ -421,7 +421,7 @@ h1{font-size:32px;line-height:1.2;font-weight:700;color:#173638}
 .pipeline{margin-top:26px}
 .pipeline-row{padding:11px 0;font-size:12px;color:#536966}
 .step-number,.step-state{font-size:11px}
-.lookup-workspace{grid-template-columns:minmax(0,1fr) 245px;gap:30px;padding:28px}
+.lookup-workspace{grid-template-columns:minmax(0,1fr);gap:30px;padding:28px}
 .mode-switch{gap:23px;margin-bottom:21px}
 .mode-button{font-size:14px;padding-bottom:14px}
 .query-form{height:54px;border-radius:7px;padding:5px 6px 5px 14px;gap:10px}
@@ -829,5 +829,651 @@ body{background:#f5f7fa}
 .learning-stat-detail-close{float:right;margin:0 0 10px auto}
 .learning-entry-detail .learning-image-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin-top:18px}
 .learning-entry-detail .learning-entry-image{width:100%;max-width:none;max-height:360px;object-fit:contain;border-radius:7px;box-shadow:0 3px 12px rgba(28,49,39,.06)}
+.learning-detail-back-inline{display:inline-flex;align-items:center;gap:7px;min-height:40px;margin:0 0 18px;border:1px solid #cbded1;border-radius:7px;background:#edf6ef;padding:0 14px;color:#245b43;font:600 14px/1 "DM Sans","Noto Sans SC",sans-serif;cursor:pointer}
+.learning-detail-back-inline:hover{border-color:#90b99c;background:#e2f0e5}
+.learning-entry-page-head #learning-detail-back{min-width:145px;border-color:#c7dbce;background:#eaf4ec;color:#245b43;font-size:13px;font-weight:600}
+.learning-entry-page-head #learning-detail-back:hover{border-color:#90b99c;background:#e0efe4}
+.learning-detail-actions{justify-content:space-between}
 @media(max-width:850px){.learning-stat-totals{grid-template-columns:repeat(4,minmax(0,1fr))}.learning-entry{grid-template-columns:1fr}.learning-entry-actions{justify-content:flex-start}}
 @media(max-width:560px){.learning-page{padding:13px 12px}.learning-overview{grid-template-columns:repeat(2,minmax(0,1fr))}.learning-session-heading,.learning-section-heading{align-items:flex-start}.learning-session-heading h2,.learning-section-heading h2{font-size:16px}.learning-stat-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.learning-study-card{padding:17px 15px}.learning-word{font-size:24px}.learning-rating-buttons{grid-template-columns:1fr}.learning-section-heading{flex-wrap:wrap}.learning-chart{grid-template-columns:repeat(30,minmax(18px,1fr))}.learning-history-word-line{gap:5px;padding-inline:0}.learning-word-remove{max-width:95px;padding-inline:6px;font-size:11px}.learning-entry-page{padding:0 10px 22px}.learning-entry-detail{margin-top:12px;padding:20px 16px}.learning-detail-title{font-size:28px}.learning-detail-description{font-size:16px}.learning-entry-detail .learning-image-gallery{grid-template-columns:1fr;gap:10px}.learning-entry-detail .learning-entry-image{max-height:280px}.app-toast{top:12vh;right:auto;left:50%;max-width:calc(100vw - 24px);padding:15px 18px;font-size:17px}}
+
+/* Focused recognition workspace with a quiet animated light field. */
+.main-content{position:relative;isolation:isolate}
+.main-content>.topbar,.main-content>.page-wrap{position:relative;z-index:1}
+.main-content{
+  background:linear-gradient(118deg,#e5f5ed 0%,#f3faf5 43%,#eef8f4 72%,#e3f3ef 100%);
+  overflow-x:clip;
+}
+.main-content::before,
+.main-content::after{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:56px -3% 0;
+  pointer-events:none;
+}
+.main-content::before{
+  background:
+    radial-gradient(ellipse 35% 38% at 4% 35%,rgba(112,232,183,.34) 0%,rgba(151,238,203,.14) 42%,transparent 74%),
+    radial-gradient(ellipse 37% 42% at 78% 13%,rgba(255,255,255,.86) 0%,rgba(255,255,255,.2) 48%,transparent 73%),
+    radial-gradient(ellipse 40% 36% at 98% 76%,rgba(113,226,199,.28) 0%,rgba(148,234,212,.11) 46%,transparent 74%);
+  filter:blur(14px);
+  transform-origin:50% 50%;
+  animation:recognition-orbs-a 15s ease-in-out infinite alternate;
+}
+.main-content::after{
+  background:
+    radial-gradient(ellipse 32% 38% at 30% 13%,rgba(255,255,255,.76),transparent 73%),
+    radial-gradient(ellipse 38% 34% at 7% 88%,rgba(247,216,158,.24) 0%,rgba(255,232,190,.1) 46%,transparent 74%),
+    radial-gradient(ellipse 34% 40% at 94% 50%,rgba(113,224,197,.24) 0%,rgba(150,235,214,.1) 46%,transparent 73%),
+    radial-gradient(circle,rgba(50,137,112,.04) 0 .7px,transparent 1px);
+  background-size:auto,auto,auto,28px 28px;
+  filter:blur(10px);
+  transform-origin:50% 50%;
+  animation:recognition-orbs-b 22s ease-in-out infinite alternate;
+}
+@keyframes recognition-orbs-a{
+  0%{transform:translate3d(-4%,3%,0) scale(.96)}
+  50%{transform:translate3d(5%,-4%,0) scale(1.1)}
+  100%{transform:translate3d(2%,5%,0) scale(1.02)}
+}
+@keyframes recognition-orbs-b{
+  0%{transform:translate3d(5%,-4%,0) scale(1.08)}
+  50%{transform:translate3d(-5%,5%,0) scale(.96)}
+  100%{transform:translate3d(-4%,-2%,0) scale(1.1)}
+}
+.recognize-mode .page-wrap{max-width:1500px}
+.recognize-mode .page-heading{margin-bottom:32px}
+.recognize-mode #recognize-panel{
+  grid-template-columns:minmax(0,1.48fr) minmax(310px,.78fr);
+  gap:28px;
+  padding:0 7px 12px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+  align-items:start;
+}
+.recognize-mode .camera-column{position:relative;isolation:isolate;padding:13px 9px 0 4px}
+.recognize-mode .camera-column::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:-3px -8px 28px -12px;
+  border-radius:28px;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse 48% 42% at 12% 18%,rgba(70,218,171,.34),transparent 72%),
+    radial-gradient(ellipse 45% 44% at 88% 82%,rgba(247,210,136,.3),transparent 73%),
+    radial-gradient(ellipse 55% 35% at 53% 100%,rgba(255,255,255,.68),transparent 74%);
+  filter:blur(18px);
+  transform-origin:50% 50%;
+  animation:camera-halo-drift 13s ease-in-out infinite alternate;
+}
+.recognize-mode .camera-frame,.recognize-mode .camera-foot{position:relative;z-index:1}
+@keyframes camera-halo-drift{
+  from{transform:translate3d(-5px,3px,0) scale(.99);opacity:.8}
+  to{transform:translate3d(6px,-4px,0) scale(1.035);opacity:1}
+}
+.recognize-mode .camera-frame{
+  isolation:isolate;
+  aspect-ratio:1.18;
+  min-height:420px;
+  max-height:68vh;
+  border:8px solid rgba(255,255,255,.76);
+  border-radius:18px;
+  background:rgba(236,249,243,.4);
+  backdrop-filter:blur(8px);
+  box-shadow:
+    0 0 0 1px rgba(81,151,126,.58),
+    0 0 0 6px rgba(171,224,194,.45),
+    0 0 0 11px rgba(234,199,132,.3),
+    0 18px 48px rgba(29,92,75,.16);
+  animation:recognition-frame-breathe 7s ease-in-out infinite alternate;
+}
+@property --recognition-glow-angle{
+  syntax:"<angle>";
+  inherits:false;
+  initial-value:0deg;
+}
+.recognize-mode .camera-frame::after{
+  content:"";
+  position:absolute;
+  z-index:4;
+  inset:0;
+  padding:5px;
+  border-radius:inherit;
+  pointer-events:none;
+  background:conic-gradient(from var(--recognition-glow-angle),transparent 0 24%,rgba(102,232,192,.18) 29%,#74e5c3 34%,#fff 37%,#f7d88f 40%,rgba(91,208,172,.12) 46%,transparent 53% 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask-composite:exclude;
+  filter:drop-shadow(0 0 5px rgba(75,206,167,.66));
+  animation:recognition-border-sweep 6s linear infinite;
+}
+@keyframes recognition-border-sweep{
+  to{--recognition-glow-angle:360deg}
+}
+.recognize-mode .camera-frame:not(.is-live)::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:10px;
+  border:1px solid rgba(82,137,113,.15);
+  border-radius:10px;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse 42% 48% at 20% 34%,rgba(112,232,183,.35),transparent 73%),
+    radial-gradient(ellipse 36% 43% at 78% 28%,rgba(255,255,255,.82),transparent 72%),
+    radial-gradient(ellipse 40% 38% at 76% 78%,rgba(247,216,158,.22),transparent 74%),
+    radial-gradient(circle at 15% 27%,transparent 0 25px,rgba(255,255,255,.58) 26px 27px,transparent 28px 41px,rgba(57,151,116,.25) 42px 43px,transparent 44px),
+    radial-gradient(circle at 84% 35%,transparent 0 31px,rgba(255,255,255,.54) 32px 33px,transparent 34px 51px,rgba(57,151,116,.22) 52px 53px,transparent 54px),
+    radial-gradient(circle at 78% 77%,transparent 0 23px,rgba(255,255,255,.58) 24px 25px,transparent 26px 39px,rgba(57,151,116,.2) 40px 41px,transparent 42px),
+    radial-gradient(circle at 23% 80%,rgba(255,255,255,.88) 0 2.5px,rgba(78,173,139,.42) 3px 4px,transparent 5px),
+    radial-gradient(circle at 66% 21%,rgba(255,255,255,.8) 0 2.5px,rgba(78,173,139,.38) 3px 4px,transparent 5px),
+    radial-gradient(circle at 89% 65%,rgba(255,255,255,.72) 0 2px,rgba(78,173,139,.34) 2.5px 3.5px,transparent 4.5px),
+    linear-gradient(rgba(90,145,122,.16),rgba(90,145,122,.16)) left 16px top 16px/24px 1px no-repeat,
+    linear-gradient(rgba(90,145,122,.16),rgba(90,145,122,.16)) left 16px top 16px/1px 24px no-repeat,
+    linear-gradient(rgba(90,145,122,.16),rgba(90,145,122,.16)) right 16px top 16px/24px 1px no-repeat,
+    linear-gradient(rgba(90,145,122,.16),rgba(90,145,122,.16)) right 16px top 16px/1px 24px no-repeat;
+  animation:camera-preview-orbs 7.2s ease-in-out infinite;
+}
+@keyframes camera-preview-orbs{
+  0%,100%{transform:translate3d(-1%,.8%,0) scale(.985);opacity:.58}
+  48%{transform:translate3d(1.2%,-1%,0) scale(1.025);opacity:1}
+  76%{transform:translate3d(.4%,.3%,0) scale(1.005);opacity:.74}
+}
+.recognize-mode .camera-placeholder::before,.recognize-mode .camera-placeholder::after{
+  content:"";
+  position:absolute;
+  z-index:-1;
+  width:76px;
+  aspect-ratio:1;
+  border:1px solid rgba(255,255,255,.72);
+  border-radius:50%;
+  pointer-events:none;
+  box-shadow:0 0 0 9px rgba(255,255,255,.11),0 0 24px rgba(75,199,156,.2),inset 0 0 17px rgba(255,255,255,.22);
+}
+.recognize-mode .camera-placeholder::before{
+  top:-115px;
+  left:7%;
+  animation:preview-ring-float-a 5.8s ease-in-out infinite;
+}
+.recognize-mode .camera-placeholder::after{
+  width:58px;
+  right:6%;
+  bottom:-104px;
+  border-color:rgba(72,164,129,.46);
+  box-shadow:0 0 0 8px rgba(255,255,255,.1),0 0 22px rgba(75,199,156,.25),inset 0 0 14px rgba(255,255,255,.2);
+  animation:preview-ring-float-b 7.1s ease-in-out infinite;
+}
+@keyframes preview-ring-float-a{
+  0%,100%{transform:translate3d(-4px,5px,0) scale(.92);opacity:.46}
+  50%{transform:translate3d(8px,-10px,0) scale(1.08);opacity:.92}
+}
+@keyframes preview-ring-float-b{
+  0%,100%{transform:translate3d(5px,-3px,0) scale(1.08);opacity:.38}
+  46%{transform:translate3d(-8px,8px,0) scale(.92);opacity:.88}
+}
+.recognize-mode .camera-frame.is-live{animation:none;box-shadow:0 0 0 1px rgba(81,151,126,.62),0 0 0 5px rgba(171,224,194,.35),0 14px 38px rgba(29,92,75,.18)}
+.recognize-mode .camera-placeholder{max-width:440px;padding:32px}
+.recognize-mode .camera-symbol{width:62px;height:49px;border-color:#83a998;border-radius:8px;margin-bottom:24px}
+.recognize-mode .camera-symbol:before{left:10px;right:10px;top:10px;height:25px;border-color:#6b9582;border-radius:5px}
+.recognize-mode .camera-symbol:after{right:-9px;top:16px;width:7px;height:14px;border-color:#6b9582}
+.recognize-mode .camera-symbol span{width:12px;height:12px;top:17px;left:24px;border-color:#4d806c}
+.recognize-mode .camera-placeholder strong{font-size:21px;color:#17483f}
+.recognize-mode .camera-placeholder p{max-width:360px;font-size:14px;color:#728a80;line-height:1.8;margin:9px 0 24px}
+.recognize-mode .camera-placeholder p{color:#4d6c60;font-weight:500}
+.recognize-mode #camera-start{height:48px;padding:0 22px;border-radius:9px;font-size:15px;box-shadow:0 8px 20px rgba(25,123,114,.22)}
+.recognize-mode .camera-top-label{top:22px;left:22px;z-index:3;border-radius:20px;padding:9px 13px;background:rgba(255,255,255,.91);font:12px "DM Sans","Noto Sans SC",sans-serif;box-shadow:0 4px 14px rgba(36,85,68,.08)}
+.recognize-mode .camera-top-label{color:#315f50;font-weight:600;background:rgba(255,255,255,.96);box-shadow:0 5px 16px rgba(31,94,72,.13),inset 0 1px rgba(255,255,255,.95)}
+.recognize-mode .camera-top-label .live-dot{background:#4c9a78;box-shadow:0 0 0 3px rgba(76,154,120,.14)}
+.recognize-mode .camera-corner{z-index:2;width:25px;height:25px;border-color:#438b70;border-width:2px;opacity:.76}
+.recognize-mode .camera-frame{animation-duration:6s}
+.recognize-mode .is-live .camera-corner{opacity:.9}
+.recognize-mode .camera-foot{padding:15px 4px 0;font-size:12px}
+.recognize-mode .result-column{
+  min-width:0;
+  padding:23px 22px 20px;
+  border:1px solid rgba(255,255,255,.88);
+  border-radius:15px;
+  background:rgba(249,255,252,.62);
+  box-shadow:0 16px 40px rgba(35,86,69,.14),inset 0 1px rgba(255,255,255,.85);
+  backdrop-filter:blur(16px) saturate(115%);
+}
+.recognize-mode .model-status{background:#edf8f1;border-color:#d4eadb;border-radius:8px}
+.recognize-mode .model-status strong{color:#336b4f}
+.recognize-mode .model-status p{color:#718b7a}
+.recognize-mode .model-status.is-ready{background:#edf8f1;border-color:#cce8d5}
+.recognize-mode .model-status.is-ready .status-icon{background:#d8efdf;color:#2e7b4d}
+.recognize-mode .model-status.is-error{background:#fff5ee;border-color:#f0d9c8}
+.recognize-mode .model-status.is-error .status-icon{background:#f8e4d5;color:#a65931}
+.recognize-mode .model-status.is-error strong{color:#8c5636}
+.recognize-mode .result-empty{min-height:172px;border-radius:10px;background:#f3faf6;border-color:#d8eadd}
+.recognize-mode .result-empty strong{font-size:17px;color:#355f4c}
+.recognize-mode .result-empty p{font-size:13px;color:#71877b;line-height:1.7}
+.recognize-mode .result-empty.is-recognized strong{font-size:34px;color:#125d59}
+.recognize-mode .recognition-history,.recognize-mode .sign-guidance{margin-top:24px}
+.recognize-mode .history-list{max-height:160px}
+.recognize-mode .sign-guidance{border-radius:9px;background:#f4f8f4;border-color:#e5ede5}
+.recognize-mode .pipeline{margin-top:24px;padding-top:17px;border-top:1px solid #e8efea}
+.recognize-mode .pipeline-row{gap:11px;padding:10px 0;border:0;font-size:12px}
+.recognize-mode .step-number{width:25px;height:25px;display:grid;place-items:center;flex:none;border:1px solid #dce8df;border-radius:50%;background:#f4f8f5;color:#748a7d;font:11px "DM Mono",monospace}
+.recognize-mode .pipeline-row[data-state="active"] .step-number{border-color:#a7d4b8;background:#e4f5e9;color:#28734c}
+.recognize-mode .pipeline-row[data-state="done"] .step-number{border-color:#b8ddc5;background:#dff1e5;color:#267046}
+.recognize-mode .pipeline-row[data-state="done"] .step-state{color:#438262}
+@keyframes recognition-frame-breathe{
+  from{box-shadow:0 0 0 1px rgba(81,151,126,.5),0 0 0 6px rgba(171,224,194,.34),0 0 0 11px rgba(234,199,132,.22),0 18px 48px rgba(29,92,75,.14)}
+  to{box-shadow:0 0 0 1px rgba(81,151,126,.68),0 0 0 7px rgba(171,224,194,.48),0 0 0 12px rgba(234,199,132,.36),0 20px 54px rgba(29,92,75,.2)}
+}
+@media(max-width:1000px){
+  .recognize-mode #recognize-panel{grid-template-columns:minmax(0,1.25fr) minmax(285px,.88fr);gap:22px}
+  .recognize-mode .result-column{padding:19px 17px}
+  .recognize-mode .camera-frame{min-height:380px}
+}
+@media(max-width:760px){
+  .recognize-mode .page-heading{margin-bottom:22px}
+  .recognize-mode #recognize-panel{grid-template-columns:minmax(0,1fr);gap:23px;padding:0}
+  .recognize-mode .camera-column{padding:8px 7px 0}
+  .recognize-mode .camera-frame{aspect-ratio:1.18;min-height:280px;max-height:none;border-width:6px;border-radius:14px}
+  .recognize-mode .camera-placeholder{padding:22px}
+  .recognize-mode .camera-placeholder strong{font-size:18px}
+  .recognize-mode .camera-placeholder p{font-size:12px;margin:7px 0 18px}
+  .recognize-mode .camera-top-label{top:15px;left:15px}
+  .recognize-mode .result-column{padding:18px 16px;border-radius:12px}
+}
+@media(max-width:420px){
+  .recognize-mode .camera-frame{min-height:240px}
+  .recognize-mode .camera-placeholder{padding:17px}
+  .recognize-mode .camera-placeholder::before{top:-74px;left:3%;width:54px}
+  .recognize-mode .camera-placeholder::after{right:3%;bottom:-70px;width:46px}
+  .recognize-mode .camera-placeholder strong{font-size:16px}
+  .recognize-mode .camera-placeholder p{font-size:11px}
+  .recognize-mode .result-column{padding:16px 13px}
+}
+@media(prefers-reduced-motion:reduce){
+  .main-content::before,.main-content::after,.recognize-mode .camera-column::before,
+  .recognize-mode .camera-frame:not(.is-live)::before,.recognize-mode .camera-frame,
+  .recognize-mode .camera-frame::after{animation:none!important}
+}
+
+/* A shared light field stays visible through the translucent app surfaces. */
+body{
+  background-color:#c5dcd4;
+  background-image:
+    radial-gradient(ellipse at 8% 25%,rgba(57,163,137,.38),transparent 48%),
+    radial-gradient(ellipse at 84% 65%,rgba(69,150,164,.32),transparent 52%),
+    radial-gradient(ellipse at 48% 90%,rgba(246,220,169,.24),transparent 50%),
+    linear-gradient(118deg,#accfc0,#e1eae1 45%,#afcfd0);
+  background-size:145% 145%,155% 150%,140% 145%,100% 100%;
+  background-attachment:fixed;
+  animation:ambient-glass-drift 23s ease-in-out infinite alternate;
+}
+@keyframes ambient-glass-drift{
+  0%{background-position:0% 0%,100% 100%,30% 100%,0 0}
+  38%{background-position:42% 18%,52% 73%,84% 30%,0 0}
+  72%{background-position:72% 65%,12% 22%,34% 78%,0 0}
+  100%{background-position:35% 90%,80% 8%,68% 42%,0 0}
+}
+.main-content{
+  background:rgba(235,247,241,.1);
+  background-image:url("./assets/signing-hands-line.svg");
+  background-repeat:no-repeat;
+  background-position:right 12% top 64px;
+  background-size:min(31vw,410px) auto;
+}
+.workspace,.learning-page{
+  background:rgba(249,255,252,.52);
+  border-color:rgba(255,255,255,.75);
+  box-shadow:0 16px 42px rgba(31,76,64,.13),inset 0 1px rgba(255,255,255,.9);
+  backdrop-filter:blur(16px) saturate(115%);
+}
+.communication-records{background:rgba(240,251,245,.48)}
+.topbar{background:rgba(250,255,252,.48);backdrop-filter:blur(18px)}
+.main-content::before{
+  inset:56px -5% 0;
+  filter:blur(20px);
+  background:
+    radial-gradient(ellipse 32% 35% at 3% 36%,rgba(67,197,156,.42),transparent 75%),
+    radial-gradient(ellipse 30% 37% at 78% 12%,rgba(255,255,255,.62),transparent 74%),
+    radial-gradient(ellipse 34% 34% at 98% 76%,rgba(56,164,168,.34),transparent 76%),
+    radial-gradient(ellipse 28% 32% at 42% 80%,rgba(245,216,165,.22),transparent 75%);
+  animation:recognition-orbs-a 24s ease-in-out infinite alternate;
+  will-change:transform;
+}
+.main-content::after{
+  inset:56px -2% 0;
+  filter:none;
+  opacity:.92;
+  background:
+    url("./assets/signing-hands-line.svg") right 12% top 64px / min(31vw,410px) auto no-repeat,
+    radial-gradient(circle at 12% 21%,transparent 0 96px,rgba(69,157,132,.12) 97px 98px,transparent 99px 138px,rgba(255,255,255,.38) 139px 140px,transparent 141px),
+    radial-gradient(circle at 86% 35%,transparent 0 158px,rgba(82,175,152,.1) 159px 160px,transparent 161px 204px,rgba(255,255,255,.42) 205px 206px,transparent 207px),
+    radial-gradient(circle at 57% 86%,transparent 0 124px,rgba(222,177,106,.11) 125px 126px,transparent 127px 175px,rgba(255,255,255,.34) 176px 177px,transparent 178px),
+    linear-gradient(112deg,transparent 29%,rgba(255,255,255,.06) 37%,rgba(255,255,255,.58) 47%,rgba(178,239,218,.25) 50%,rgba(255,255,255,.04) 57%,transparent 64%);
+  background-size:min(31vw,410px) auto,auto,auto,auto,360% 210%;
+  animation:recognition-light-sweep 19s cubic-bezier(.4,0,.2,1) infinite alternate;
+  will-change:background-position;
+}
+@keyframes recognition-light-sweep{
+  0%{background-position:right 12% top 64px,0 0,0 0,0 0,0% 18%}
+  43%{background-position:right 12% top 64px,10px -8px,-12px 10px,7px 16px,64% 78%}
+  100%{background-position:right 12% top 64px,-14px 12px,16px -12px,-8px -15px,100% 34%}
+}
+.page-wrap{position:relative}
+.page-heading{position:relative;isolation:isolate}
+.page-heading::after{
+  content:"";
+  position:absolute;
+  z-index:0;
+  top:-54px;
+  right:11%;
+  width:min(17vw,205px);
+  aspect-ratio:3 / 4;
+  pointer-events:none;
+  background:url("./assets/signing-hands-line.svg") center / contain no-repeat;
+  opacity:.38;
+  animation:hand-line-float 17s ease-in-out infinite alternate;
+}
+.page-heading>*{position:relative;z-index:1}
+@keyframes hand-line-float{
+  0%{transform:translate3d(-4px,4px,0) rotate(-1.5deg);opacity:.26}
+  55%{transform:translate3d(5px,-6px,0) rotate(1deg);opacity:.43}
+  100%{transform:translate3d(-2px,-2px,0) rotate(-.5deg);opacity:.32}
+}
+
+.sidebar{
+  position:fixed;
+  isolation:isolate;
+  overflow:hidden;
+  background:linear-gradient(158deg,rgba(19,83,76,.67) 0%,rgba(23,103,91,.56) 46%,rgba(20,78,82,.67) 100%);
+  backdrop-filter:blur(30px) saturate(128%);
+  -webkit-backdrop-filter:blur(30px) saturate(128%);
+  border-right:1px solid rgba(235,255,247,.42);
+  box-shadow:inset -1px 0 rgba(230,255,243,.22),10px 0 40px rgba(21,77,71,.14);
+  padding:31px 19px 21px;
+}
+.sidebar::before,.sidebar::after{
+  content:"";
+  position:absolute;
+  z-index:-1;
+  inset:-8%;
+  pointer-events:none;
+}
+.sidebar::before{
+  background:
+    radial-gradient(ellipse 82% 34% at 0% 5%,rgba(130,250,202,.35),transparent 74%),
+    radial-gradient(ellipse 78% 36% at 100% 57%,rgba(105,218,205,.29),transparent 76%),
+    radial-gradient(ellipse 72% 33% at 18% 100%,rgba(240,193,119,.19),transparent 76%);
+  filter:blur(22px);
+  animation:sidebar-light-breathe 21s ease-in-out infinite alternate;
+  will-change:transform,opacity;
+}
+.sidebar::after{
+  opacity:.48;
+  background:
+    url("./assets/signing-hands-line.svg") right -67px bottom 154px / 226px auto no-repeat,
+    radial-gradient(circle at 14% 17%,transparent 0 45px,rgba(215,245,228,.24) 46px 47px,transparent 48px 68px,rgba(229,196,139,.15) 69px 70px,transparent 71px),
+    radial-gradient(circle at 103% 69%,transparent 0 76px,rgba(206,240,224,.13) 77px 78px,transparent 79px 108px,rgba(206,240,224,.08) 109px 110px,transparent 111px),
+    repeating-linear-gradient(151deg,transparent 0 98px,rgba(231,245,235,.07) 99px,transparent 100px 197px);
+  animation:sidebar-contour-drift 31s ease-in-out infinite alternate;
+  will-change:transform,background-position;
+}
+.sidebar>*{position:relative;z-index:1}
+.brand{padding:0 9px 37px;gap:14px}
+.brand-mark{filter:drop-shadow(0 4px 12px rgba(125,233,190,.2))}
+.side-label{display:flex;align-items:center;gap:10px;padding:0 12px 13px;color:#a0c2b9;letter-spacing:1.6px}
+.side-label::after{content:"";height:1px;flex:1;background:linear-gradient(90deg,rgba(200,231,218,.24),transparent)}
+.nav-list{gap:9px}
+.nav-item{
+  position:relative;
+  height:49px;
+  gap:14px;
+  padding:0 13px;
+  border:1px solid transparent;
+  border-radius:9px;
+  color:#e4f2ec;
+  background:rgba(255,255,255,.012);
+  transition:background .24s ease,border-color .24s ease,color .24s ease,transform .24s ease,box-shadow .24s ease;
+}
+.nav-item:hover{background:rgba(220,247,233,.085);border-color:rgba(220,247,233,.09);transform:translateX(3px)}
+.nav-item.active{
+  color:#173d39;
+  border-color:rgba(255,255,255,.58);
+  background:linear-gradient(105deg,rgba(233,249,236,.9),rgba(209,239,222,.8));
+  box-shadow:0 7px 22px rgba(4,31,30,.18),inset 0 1px rgba(255,255,255,.86);
+}
+.nav-item.active::before{
+  content:"";
+  position:absolute;
+  left:-1px;
+  top:10px;
+  bottom:10px;
+  width:3px;
+  border-radius:0 3px 3px 0;
+  background:linear-gradient(180deg,#f0c37a,#e6815f);
+  box-shadow:0 0 12px rgba(237,176,107,.36);
+}
+.nav-icon{width:25px;height:25px;border-radius:7px;background:rgba(224,246,234,.1);color:#c8e5d7;transition:background .24s ease,color .24s ease,transform .24s ease}
+.nav-item:hover .nav-icon{transform:translateY(-1px);background:rgba(224,246,234,.16)}
+.nav-item.active .nav-icon{background:rgba(142,199,164,.36);color:#17645a}
+.nav-item kbd{font-size:10px;color:#a4c0b7}
+.nav-item.active kbd{color:#6d8a7b}
+.sidebar-bottom{padding-top:8px}
+.privacy-note{border-color:rgba(224,241,235,.16);border-radius:10px;background:rgba(215,244,228,.045);padding:15px 12px}
+.version{margin-top:9px;padding:14px 12px 0}
+@keyframes sidebar-light-breathe{
+  0%{transform:translate3d(-3%,2%,0) scale(.92);opacity:.72}
+  48%{transform:translate3d(3%,-2%,0) scale(1.08);opacity:1}
+  100%{transform:translate3d(1%,3%,0) scale(.98);opacity:.84}
+}
+@keyframes sidebar-contour-drift{
+  0%{transform:translate3d(-1.5%,1%,0);background-position:right -67px bottom 154px,0 0,0 0,0 0}
+  50%{transform:translate3d(1.2%,-1.4%,0);background-position:right -42px bottom 194px,12px -10px,-8px 11px,20px -12px}
+  100%{transform:translate3d(2%,1.5%,0);background-position:right -78px bottom 176px,-9px 13px,15px -9px,-18px 12px}
+}
+@media(max-width:1000px){
+  .sidebar{padding-inline:15px}
+  .nav-list{gap:7px}
+  .nav-item{height:47px}
+}
+@media(max-width:760px){
+  .main-content::after{opacity:.46}
+  .main-content::before{inset:58px -10% 0}
+  .main-content{background-position:right 2% top 68px;background-size:min(48vw,260px) auto}
+  .page-heading::after{top:-20px;right:1%;width:110px;opacity:.25}
+}
+.learning-entry-page{
+  isolation:isolate;
+  background:linear-gradient(118deg,rgba(202,227,214,.9) 0%,rgba(229,235,219,.9) 48%,rgba(188,219,214,.9) 100%);
+}
+.learning-entry-page::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:0;
+  pointer-events:none;
+  background:
+    radial-gradient(circle at 12% 18%,transparent 0 120px,rgba(65,157,132,.13) 121px 122px,transparent 123px 169px,rgba(255,255,255,.5) 170px 171px,transparent 172px),
+    radial-gradient(circle at 92% 74%,transparent 0 180px,rgba(90,178,157,.12) 181px 182px,transparent 183px 226px,rgba(235,196,133,.13) 227px 228px,transparent 229px),
+    repeating-linear-gradient(148deg,transparent 0 126px,rgba(255,255,255,.45) 127px,rgba(88,171,147,.06) 128px,transparent 130px 254px);
+  animation:learning-contour-drift 34s ease-in-out infinite alternate;
+}
+@keyframes learning-contour-drift{
+  from{background-position:0 0,0 0,0 0}
+  to{background-position:16px -12px,-18px 14px,46px -28px}
+}
+.learning-entry-page-head,.learning-entry-detail{position:relative;z-index:1}
+.learning-entry-page-head{background:rgba(246,250,247,.73);backdrop-filter:blur(16px)}
+.learning-entry-detail{background:rgba(255,255,255,.82);border-color:rgba(255,255,255,.9);backdrop-filter:blur(14px)}
+/* Keep compact labels readable over the deeper translucent background. */
+.breadcrumb{color:#405f56}
+.breadcrumb strong{color:#1e443d;font-weight:650}
+.eyebrow{color:#3e6258;font-weight:600}
+.page-description{color:#45665c;font-weight:500}
+.learning-tab{color:#4b665c;font-size:13px;font-weight:550}
+.learning-tab:hover,.learning-tab.active{color:#145d52}
+.learning-session-heading p,.learning-section-heading p{color:#526d61;font-size:13px;font-weight:500}
+.learning-progress,.learning-date-heading,.learning-chart-value,.learning-chart-date{color:#52685e}
+.section-kicker,.history-caption,.camera-foot,.small-dot+.camera-foot{color:#4e695e}
+@media(prefers-reduced-motion:reduce){
+  body{animation:none!important}
+  .main-content::before,.main-content::after,.sidebar::before,.sidebar::after,
+  .learning-entry-page::before,
+  .recognize-mode .camera-column::before,.recognize-mode .camera-frame:not(.is-live)::before,
+  .recognize-mode .camera-frame,.recognize-mode .camera-frame::after,
+  .recognize-mode .camera-placeholder::before,.recognize-mode .camera-placeholder::after{animation:none!important}
+}
+
+/* Give non-recognition workspaces their own visible, slow-moving glass light. */
+.app-shell:not(.recognize-mode) .main-content::before{
+  filter:blur(12px);
+  background:
+    radial-gradient(ellipse 35% 39% at 4% 28%,rgba(37,177,133,.64),transparent 72%),
+    radial-gradient(ellipse 32% 40% at 83% 18%,rgba(255,255,255,.78),transparent 73%),
+    radial-gradient(ellipse 38% 36% at 94% 78%,rgba(34,151,169,.54),transparent 74%),
+    radial-gradient(ellipse 32% 33% at 42% 88%,rgba(241,196,121,.36),transparent 74%);
+  animation:module-orb-breathe 10s ease-in-out infinite alternate;
+}
+.app-shell:not(.recognize-mode) .main-content::after{
+  opacity:1;
+  background:
+    url("./assets/signing-hands-line.svg") right 5% top 72px / min(26vw,340px) auto no-repeat,
+    radial-gradient(circle at 14% 32%,transparent 0 46px,rgba(255,255,255,.72) 47px 49px,transparent 50px 76px,rgba(39,157,122,.36) 77px 79px,transparent 80px),
+    radial-gradient(circle at 88% 72%,transparent 0 68px,rgba(255,255,255,.68) 69px 71px,transparent 72px 106px,rgba(39,157,122,.3) 107px 109px,transparent 110px),
+    linear-gradient(118deg,transparent 21%,rgba(255,255,255,.04) 33%,rgba(255,255,255,.42) 46%,rgba(118,226,194,.24) 51%,rgba(255,255,255,.06) 59%,transparent 72%);
+  background-size:min(26vw,340px) auto,auto,auto,320% 220%;
+  animation:module-light-flow 6s ease-in-out infinite alternate;
+}
+.app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page){
+  position:relative;
+  isolation:isolate;
+}
+.app-shell:not(.recognize-mode) .workspace,.app-shell:not(.recognize-mode) .learning-page{
+  background-color:rgba(249,255,252,.34);
+  backdrop-filter:blur(9px) saturate(125%);
+  -webkit-backdrop-filter:blur(9px) saturate(125%);
+}
+.app-shell:not(.recognize-mode) .communication-records{background:rgba(240,251,245,.34)}
+.app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page)::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse 38% 43% at 3% 16%,rgba(52,194,146,.42),transparent 74%),
+    radial-gradient(ellipse 40% 46% at 94% 84%,rgba(67,177,177,.38),transparent 75%),
+    radial-gradient(circle at 74% 24%,transparent 0 48px,rgba(255,255,255,.62) 49px 51px,transparent 52px 78px,rgba(50,169,133,.25) 79px 81px,transparent 82px),
+    radial-gradient(circle at 23% 82%,transparent 0 35px,rgba(255,255,255,.54) 36px 38px,transparent 39px 62px,rgba(50,169,133,.23) 63px 65px,transparent 66px),
+    linear-gradient(116deg,transparent 24%,rgba(255,255,255,.08) 34%,rgba(255,255,255,.62) 47%,rgba(99,225,185,.34) 53%,rgba(255,255,255,.1) 62%,transparent 74%);
+  background-size:auto,auto,auto,auto,320% 180%;
+  background-position:0 0,0 0,0 0,0 0,0% 48%;
+  background-repeat:no-repeat;
+  opacity:.98;
+  animation:workspace-glass-float 7s ease-in-out infinite alternate;
+}
+.app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page)>*{
+  position:relative;
+  z-index:1;
+}
+.app-shell:not(.recognize-mode) :is(.query-hint,.lookup-aside>p,.aside-stat,.aside-note,.candidate-heading small,.entry-source,.book-knowledge-heading p,.knowledge-search-history-empty,.book-review-details,.record-count,.record-storage-note,.communication-timestamp,.speech-disclosure,.transcript-speech-status,.ai-actions>p,.learning-label,.learning-progress,.learning-chart-value,.learning-chart-date,.learning-card-source,.learning-entry-source,.learning-word-preview-source,.learning-word-preview-loading,.learning-empty,.learning-loading,.profile-section-heading p,.avatar-editor small,.profile-form label small,.page-footer){
+  color:#3e5f53;
+}
+.app-shell:not(.recognize-mode) :is(.query-hint,.entry-source,.knowledge-search-history-empty,.book-review-details,.record-count,.record-storage-note,.speech-disclosure,.transcript-speech-status,.learning-label,.learning-card-source,.learning-entry-source,.learning-word-preview-source,.learning-word-preview-loading,.profile-form label small,.page-footer){
+  font-size:12px;
+}
+.app-shell:not(.recognize-mode) :is(.query-hint,.record-storage-note,.speech-disclosure,.profile-section-heading p){line-height:1.65}
+@keyframes module-orb-breathe{
+  0%{transform:translate3d(-3%,1%,0) scale(.96);opacity:.68}
+  52%{transform:translate3d(2%,-2%,0) scale(1.05);opacity:1}
+  100%{transform:translate3d(4%,2%,0) scale(1);opacity:.82}
+}
+@keyframes module-light-flow{
+  0%{background-position:right 5% top 72px,0 0,0 0,0% 18%;opacity:.7}
+  48%{background-position:right 5% top 72px,22px -18px,-18px 24px,70% 78%;opacity:1}
+  100%{background-position:right 5% top 72px,-18px 21px,22px -19px,100% 34%;opacity:.78}
+}
+@keyframes workspace-glass-float{
+  0%{transform:translate3d(-1.4%,1%,0) scale(.98);opacity:.7;background-position:0 0,0 0,0 0,0 0,0% 48%}
+  50%{transform:translate3d(1.3%,-1%,0) scale(1.025);opacity:1;background-position:14px -10px,-12px 15px,8px -7px,-9px 12px,72% 52%}
+  100%{transform:translate3d(-.5%,1.1%,0) scale(1);opacity:.82;background-position:-10px 14px,17px -12px,-8px 11px,12px -8px,100% 46%}
+}
+@media(max-width:760px){
+  .app-shell:not(.recognize-mode) .main-content::after{opacity:.9}
+  .app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page)::before{opacity:.8}
+}
+@media(prefers-reduced-motion:reduce){
+  .app-shell:not(.recognize-mode) .main-content::before,
+  .app-shell:not(.recognize-mode) .main-content::after,
+  .app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page)::before{animation:none!important}
+}
+
+/* One canopy behind the whole workspace: camera and panels see the same branches.
+   Keep this outside .page-wrap so backdrop-filter never creates a second canvas. */
+.ambient-willow{
+  position:fixed;
+  inset:56px 0 0 258px;
+  z-index:0;
+  overflow:hidden;
+  pointer-events:none;
+  user-select:none;
+  opacity:.88;
+  contain:strict;
+}
+.ambient-willow img{
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  object-position:right top;
+}
+/* Glass tints reveal the shared scene without duplicating a branch per card. */
+.recognize-mode #recognize-panel{backdrop-filter:none;-webkit-backdrop-filter:none}
+.recognize-mode .camera-column::before{content:none}
+.recognize-mode .camera-frame:not(.is-live){
+  background:rgba(239,252,245,.17);
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+.recognize-mode .camera-frame:not(.is-live)::before{
+  background:none;
+  animation:none;
+}
+.recognize-mode .camera-placeholder{
+  border-radius:20px;
+  background:radial-gradient(ellipse,rgba(242,252,246,.93),rgba(242,252,246,.72) 52%,transparent 74%);
+}
+.recognize-mode .camera-frame.is-live{
+  background:#1b2724;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+.recognize-mode .result-column{
+  background:rgba(249,255,252,.82);
+}
+.app-shell:not(.recognize-mode) .workspace,
+.app-shell:not(.recognize-mode) .learning-page{
+  background-color:rgba(249,255,252,.58);
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+.app-shell:not(.recognize-mode) :is(.lookup-workspace,.learning-page,.communication-workspace,.profile-page)::before{
+  opacity:.4;
+}
+.learning-entry-page::before{
+  background:url("./assets/willow-canopy.svg") right top / cover no-repeat;
+  animation:none;
+  opacity:.65;
+}
+/* Small text stays solid even when a leaf or a light passes behind the glass. */
+.recognize-mode :is(.camera-foot,.history-caption,.history-empty,.history-index,.step-state,.model-status p,.result-empty p,.sign-guidance ul){color:#466457}
+.sidebar :is(.brand small,.privacy-note small,.version,.side-label){color:#d4e9df}
+@media(max-width:1000px){.ambient-willow{left:218px}}
+@media(max-width:760px){
+  .ambient-willow{inset:52px 0 0;opacity:.74}
+  .ambient-willow img{object-position:72% top}
+  .recognize-mode .camera-placeholder{padding:22px 16px}
+}

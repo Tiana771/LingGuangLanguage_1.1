@@ -7,7 +7,7 @@ import { initializeAuth } from "./auth_client.mjs";
 import { initializeLearning } from "./learning_client.mjs";
 
 const modes = {
-  recognize: { title: "手语识别", description: "限定词表仅覆盖十个训练词；摄像头特征在本地提取。" },
+  recognize: { title: "手语识别", description: "在画面中比划，查看系统识别到的手语词汇。" },
   video: { title: "查手语视频", description: "输入词语查找对应的手语示范；尚未收录的表达会明确提示。" },
   knowledge: { title: "问手语知识", description: "检索国家通用手语词典的已审核内容，展示原文、书中图片和出处。" },
   communication: { title: "沟通助手", description: "实时查看口语转写，保存沟通记录，并按需整理重点或生成回复建议。" },
@@ -77,6 +77,7 @@ function setMode(mode) {
   if (mode !== "recognize" && cameraStream) stopCamera();
   if (mode !== "communication") stopCommunicationListening();
   currentMode = mode;
+  document.querySelector(".app-shell").classList.toggle("recognize-mode", mode === "recognize");
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.mode === mode));
   modeButtons.forEach((item) => item.classList.toggle("active", item.dataset.mode === mode));
   const isRecognize = mode === "recognize";
@@ -86,7 +87,6 @@ function setMode(mode) {
   document.querySelector("#book-knowledge-panel").classList.toggle("hidden", mode !== "knowledge");
   document.querySelector("#lookup-mode-switch").classList.toggle("hidden", mode === "knowledge");
   document.querySelector(".lookup-main").classList.toggle("hidden", mode === "knowledge");
-  document.querySelector("#lookup-aside").classList.toggle("hidden", mode === "knowledge");
   communicationPanel.classList.toggle("hidden", mode !== "communication");
   profilePanel.classList.toggle("hidden", mode !== "profile");
   learningPanel.classList.toggle("hidden", mode !== "learning");
@@ -94,12 +94,7 @@ function setMode(mode) {
   document.querySelector("#page-description").textContent = modes[mode].description;
   document.querySelector("#breadcrumb-current").textContent = modes[mode].title;
   document.querySelector("#page-eyebrow-detail").textContent = mode === "communication" ? "实时字幕与记录" : mode === "profile" ? "账号与偏好" : mode === "learning" ? "个人学习计划" : "限定词表";
-  document.querySelector(".scope-chip").classList.toggle("hidden", mode === "profile" || mode === "learning");
   document.querySelector("#result-label").textContent = mode === "video" ? "词条匹配" : "资料检索";
-  document.querySelector("#aside-title").textContent = mode === "video" ? "词条状态" : "资料范围";
-  document.querySelector("#aside-copy").textContent = mode === "video"
-    ? "词条由 Flask 本地接口提供；视频素材尚未补充时会显示等待状态。"
-    : "当前通过本地词条接口检索；没有资料时明确提示未收录，不调用大模型。";
   input.placeholder = mode === "video" ? "输入一个词语，例如：谢谢" : "例如：谢谢适合什么场合用？";
   document.querySelector("#query-hint").textContent = mode === "video"
     ? "语音会先转成可编辑文字，再由你确认查询。"
@@ -173,7 +168,6 @@ async function loadTerms() {
       button.textContent = entry.term;
       return button;
     }));
-    document.querySelector("#term-count").textContent = String(entries.length);
   } catch (error) {
     feedback.textContent = `${error.message}，请确认 Flask 服务已启动；文字输入仍可保留。`;
   }
@@ -181,7 +175,7 @@ async function loadTerms() {
 
 async function checkModel() {
   const title = document.querySelector("#model-status-title");
-  const copy = document.querySelector("#model-status-copy");
+  const status = document.querySelector(".model-status");
   try {
     const response = await fetch(`${API_BASE}/api/health`);
     const payload = await response.json();
@@ -189,12 +183,13 @@ async function checkModel() {
     if (!payload.camera_features_ready) throw new Error("本地 MediaPipe 运行库或 hand_landmarker.task 未就绪");
     MIN_VALID_HAND_FRAMES = Number(payload.min_selected_frames);
     if (!Number.isInteger(MIN_VALID_HAND_FRAMES) || MIN_VALID_HAND_FRAMES < 1) throw new Error("服务端有效帧门槛配置无效");
-    title.textContent = "模型与本地识别组件已就绪";
-    const profile = payload.rejection_mode === "demo" ? "演示降级阈值，未经同等校准" : "校准阈值";
-    copy.textContent = `${profile} ${Number(payload.confidence_threshold).toFixed(2)}；摄像头关键点在浏览器处理，序列仅发送到本机 Flask。`;
+    title.textContent = "识别功能已就绪";
+    status.classList.add("is-ready");
+    status.classList.remove("is-error");
   } catch (error) {
-    title.textContent = "模型或 API 尚未就绪";
-    copy.textContent = `${error.message}；请确认本机 Flask 服务已启动并加载模型。`;
+    title.textContent = "识别功能暂不可用";
+    status.classList.add("is-error");
+    status.classList.remove("is-ready");
   }
 }
 
@@ -555,11 +550,11 @@ async function loadKnowledgeStatus() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || "状态读取失败");
     if (data.knowledgeApiVersion !== 2) throw new Error("当前连到的是旧版服务。请关闭原来的服务终端，再运行 start_sample_system.py。");
-    badge.textContent = data.retrieval === "exact_title" ? "词条精确匹配" : data.retrieval === "atlas_vector" ? "Atlas 向量检索" : "关键词检索";
+    badge.textContent = data.retrieval === "exact_title" ? "词条匹配" : data.retrieval === "atlas_vector" ? "语义检索" : "资料查找";
     const datasetLabel = data.collection === "SignKnowledgeChunks_v2" ? "新版词条资料" : "旧版资料";
     status.textContent = `当前使用${datasetLabel}，已审核 ${data.approvedCount} 条，待审核 ${data.pendingCount} 条。${data.externalProcessingAllowed ? "已允许书籍内容发送到配置的模型服务。" : "当前直接显示原书内容，不调用模型。"}`;
   } catch (error) {
-    badge.textContent = "资料状态不可用";
+    badge.textContent = "暂不可用";
     status.textContent = error.message;
   }
 }
@@ -814,7 +809,7 @@ function showKnowledgeResult(data, { cachedAt = null } = {}) {
   const retrievalLabel = data.retrieval === "scenario" ? "场景候选筛选"
     : data.retrieval === "exact_title" ? "词条精确匹配"
     : data.retrieval === "similar" ? "相似词推荐"
-    : data.retrieval === "atlas_vector" ? "Atlas Vector Search" : "关键词";
+    : data.retrieval === "atlas_vector" ? "语义检索" : "词条检索";
   status.textContent = cachedAt
     ? `${data.message} 检索方式：${retrievalLabel}；已打开本地缓存结果。`
     : `${data.message} 检索方式：${retrievalLabel}；${data.answerMode || ""}`;
@@ -931,13 +926,11 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
     prepareInferenceCanvas(video);
     document.querySelector("#camera-state").textContent = "正在检测双手";
     title.textContent = "摄像头识别已启动";
-    copy.textContent = "画面在浏览器本地处理；特征序列发送到本机 API。";
     setPipelineState("pipeline-hands", "运行中");
     animationFrame = requestAnimationFrame(processCameraFrame);
     cameraStream.getVideoTracks()[0]?.addEventListener("ended", () => {
       stopCamera();
       title.textContent = "摄像头连接中断";
-      copy.textContent = "设备已断开，请重新连接后再试。";
       document.querySelector("#camera-state").textContent = "设备不可用";
     }, { once: true });
   } catch (error) {
@@ -946,9 +939,6 @@ document.querySelector("#camera-start").addEventListener("click", async () => {
       : error.name === "NotFoundError" ? "未找到可用摄像头"
         : error.message === "unsupported" ? "当前环境不支持摄像头"
           : "识别模块启动失败";
-    copy.textContent = error.message === "unsupported"
-      ? "当前环境不支持摄像头访问；可改用 localhost 或 HTTPS。"
-      : error.message;
     document.querySelector("#camera-state").textContent = error.name === "NotAllowedError" ? "权限未允许" : "启动失败";
     setRecognition(error.name === "NotAllowedError" ? "请允许浏览器使用摄像头" : `启动失败：${error.message}`, "启动失败");
   } finally {
