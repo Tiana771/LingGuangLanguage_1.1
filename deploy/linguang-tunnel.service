@@ -1,0 +1,15 @@
+[Unit]
+Description=LingGuang temporary Cloudflare HTTPS tunnel
+After=network-online.target linguang.service
+Wants=network-online.target
+Requires=linguang.service
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:5001
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
