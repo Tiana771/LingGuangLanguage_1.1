@@ -42,7 +42,7 @@ PUBLIC_ROOT_FILES = frozenset({
     "index.html", "styles.css", "app.js", "auth_client.mjs", "camera_features.mjs",
     "communication_assistant.mjs", "deepseek_stream.mjs", "learning_client.mjs",
     "prediction_smoother.mjs", "recognition_session.mjs", "speech_output.mjs",
-    "speech_retry.mjs", "transcript_blocks.mjs", "transcript_segments.mjs",
+    "speech_retry.mjs", "transcript_blocks.mjs", "transcript_segments.mjs", "agent_panel.mjs",
     "book_review_report.json",
 })
 PUBLIC_ASSET_FILES = frozenset({
@@ -1617,11 +1617,20 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
         def _agent_lookup(term):
             repository = store()
             hits = repository.search_knowledge_keywords(term, limit=3)
+            items = [_agent_public_item(item) for item in hits[:3]]
+            video = _agent_video(term)
+            if items and video.get("items"):
+                demo = video["items"][0]
+                items[0]["demo"] = {
+                    "term": demo.get("term"),
+                    "video_url": demo.get("video_url"),
+                    "sign_description": demo.get("text"),
+                }
             return {
                 "ok": True,
                 "term": term,
-                "count": len(hits),
-                "items": [_agent_public_item(item) for item in hits[:3]],
+                "count": len(items),
+                "items": items,
             }
 
         def _agent_scene(query):
@@ -1685,6 +1694,14 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             question = str(payload.get("question") or "").strip()[:500]
             if not question:
                 return _json_error("请提供问题。", 400)
+            history = []
+            for item in (payload.get("history") or [])[-8:]:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "")
+                content = str(item.get("content") or "").strip()
+                if role in {"user", "assistant"} and content:
+                    history.append({"role": role, "content": content[:2000]})
             api_key = os.environ.get("DEEP_SEEK_API_KEY", "").strip()
             if not api_key:
                 return _json_error("DeepSeek API 尚未配置，无法运行 Agent 探针。", 503)
@@ -1698,6 +1715,7 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             }
             events = agent_probe_module.iter_agent_stream(
                 question=question,
+                history=history,
                 api_key=api_key,
                 endpoint=_deepseek_endpoint(),
                 model=os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat"),
@@ -1708,6 +1726,13 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
                 mimetype="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
+
+
+        @app.get("/agent-demo")
+        def agent_demo():
+            import agent_probe as agent_probe_module
+
+            return Response(agent_probe_module.AGENT_DEMO_HTML, mimetype="text/html; charset=utf-8")
 
     return app
 

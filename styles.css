@@ -1477,3 +1477,46 @@ body{
   .ambient-willow img{object-position:72% top}
   .recognize-mode .camera-placeholder{padding:22px 16px}
 }
+
+/* AI 助手：右下角悬浮球 + 右侧抽屉 */
+.agent-ball-wrap{position:fixed;right:26px;bottom:26px;z-index:25}
+.agent-ball{width:56px;height:56px;border-radius:50%;border:0;background:var(--green);color:#fff;display:grid;place-items:center;box-shadow:0 10px 26px rgba(20,94,76,.32);transition:transform .18s ease,box-shadow .18s ease}
+.agent-ball svg{width:26px;height:26px}
+.agent-ball:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(20,94,76,.36)}
+.agent-ball:focus-visible{outline:2px solid var(--green-dark);outline-offset:3px}
+.agent-drawer{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:92vw;background:#fff;border-left:1px solid var(--line);box-shadow:-18px 0 40px rgba(23,42,40,.10);display:flex;flex-direction:column;transform:translateX(102%);transition:transform .26s ease;z-index:45}
+.agent-drawer.open{transform:translateX(0)}
+.agent-drawer-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 18px 14px;border-bottom:1px solid var(--line)}
+.agent-drawer-head strong{font-size:14px}
+.agent-drawer-head p{margin:5px 0 0;font-size:11px;color:var(--muted);line-height:1.6}
+.agent-drawer-body{flex:1;overflow-y:auto;padding:14px 18px}
+.agent-steps{display:grid;gap:2px;margin-bottom:10px}
+.agent-step{display:grid;grid-template-columns:8px 1fr;gap:8px;font-size:12px;color:var(--muted);padding:4px 0}
+.agent-step-dot{width:7px;height:7px;border-radius:50%;background:#c3d3cc;margin-top:7px}
+.agent-step.running .agent-step-dot{background:var(--green);animation:agent-pulse 1.1s infinite}
+.agent-step-label{border:0;background:none;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.agent-step.done .agent-step-label{color:#7e8d87}
+.agent-step-detail{display:none;grid-column:2;margin:4px 0 2px;font:11px "DM Mono",monospace;color:#6b7d76;background:#f6faf8;border:1px solid var(--line);border-radius:6px;padding:7px;white-space:pre-wrap;word-break:break-all}
+.agent-step.open .agent-step-detail{display:block}
+@keyframes agent-pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.agent-cards{display:grid;gap:9px;margin-bottom:12px}
+.agent-card{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:11px;background:#fbfdfc}
+.agent-card-video{width:150px;border-radius:6px;background:#000;flex:none}
+.agent-card-image{width:104px;height:78px;object-fit:cover;border-radius:6px;flex:none;background:var(--pale)}
+.agent-card-body{min-width:0}
+.agent-card-meta{font:10px "DM Mono",monospace;color:#93a29c;margin-bottom:3px}
+.agent-card-name{font-size:13px;font-weight:600;margin-bottom:4px}
+.agent-card-desc{margin:0;font-size:12px;line-height:1.65;color:#4c6058}
+.agent-answer{font-size:13px;line-height:1.8;white-space:pre-wrap}
+.agent-answer:empty{display:none}
+.agent-status{padding:8px 18px;font-size:11px;color:#9aa8a3;border-top:1px solid var(--line)}
+.agent-status.error{color:#b4423a}
+.agent-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 10px}
+.agent-chip{border:1px solid var(--line);background:#f9fbfa;border-radius:999px;padding:5px 10px;font-size:11px;color:var(--green-dark)}
+.agent-chip:hover{background:var(--pale)}
+.agent-form{display:flex;gap:8px;padding:0 18px 18px}
+.agent-form input{flex:1;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:13px;outline:none}
+.agent-form input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(24,122,98,.10)}
+.agent-form button{border:0;border-radius:8px;padding:0 16px;font-size:13px}
+@media (max-width:720px){.agent-drawer{width:100%;max-width:100%;border-left:0}.agent-ball-wrap{right:18px;bottom:18px}}
+body:has(.auth-dialog:not(.hidden)) .agent-ball-wrap{display:none}

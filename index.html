@@ -406,6 +406,45 @@
       <button id="response-display-close" class="response-display-close" type="button" aria-label="关闭大字展示">×</button>
       <p id="response-display-text"></p>
     </div>
+<div id="agent-ball-wrap" class="agent-ball-wrap">
+  <button id="agent-ball" class="agent-ball hidden" type="button" aria-label="打开 AI 助手" aria-expanded="false" aria-controls="agent-drawer">
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3.5 13.6 8l4.4 1.6-4.4 1.6L12 15.7l-1.6-4.5L6 9.6 10.4 8Z"/>
+      <path d="M17.5 15.5l.7 1.9 1.8.7-1.8.7-.7 1.9-.7-1.9-1.8-.7 1.8-.7Z"/>
+    </svg>
+  </button>
+</div>
+
+<aside id="agent-drawer" class="agent-drawer" aria-hidden="true" aria-label="AI 助手">
+  <header class="agent-drawer-head">
+    <div>
+      <strong>AI 助手</strong>
+      <p>可以查词条、按场景找词、调取示范视频。</p>
+    </div>
+    <button id="agent-close" class="text-button" type="button" aria-label="关闭 AI 助手">关闭</button>
+  </header>
+
+  <div class="agent-drawer-body" id="agent-drawer-body">
+    <div class="agent-steps" id="agent-steps"></div>
+    <div class="agent-cards" id="agent-cards"></div>
+    <div class="agent-answer" id="agent-answer"></div>
+  </div>
+
+  <div class="agent-status" id="agent-status" role="status" aria-live="polite">问一个词，或描述一个场景。</div>
+
+  <div class="agent-chips">
+    <button class="agent-chip" type="button" data-agent-chip="谢谢的手语怎么打">谢谢的手语怎么打</button>
+    <button class="agent-chip" type="button" data-agent-chip="去医院看病会用到哪些词">去医院看病会用到哪些词</button>
+    <button class="agent-chip" type="button" data-agent-chip="复诊的手语怎么打">复诊的手语怎么打</button>
+  </div>
+
+  <form class="agent-form" id="agent-form">
+    <label class="sr-only" for="agent-question">向 AI 助手提问</label>
+    <input id="agent-question" type="text" maxlength="200" placeholder="例如：谢谢的手语怎么打" autocomplete="off">
+    <button class="button button-primary" id="agent-send" type="submit">发送</button>
+  </form>
+</aside>
+
     <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true"></div>
     <script type="module" src="./app.js"></script>
   </body>

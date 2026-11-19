@@ -5,6 +5,7 @@ import { initializeCommunication, stopCommunicationListening } from "./communica
 import { initializeSpeechOutput } from "./speech_output.mjs";
 import { initializeAuth } from "./auth_client.mjs";
 import { initializeLearning } from "./learning_client.mjs";
+import { initializeAgentPanel } from "./agent_panel.mjs";
 
 const modes = {
   recognize: { title: "手语识别", description: "在画面中比划，查看系统识别到的手语词汇。" },
@@ -90,6 +91,10 @@ function setMode(mode) {
   communicationPanel.classList.toggle("hidden", mode !== "communication");
   profilePanel.classList.toggle("hidden", mode !== "profile");
   learningPanel.classList.toggle("hidden", mode !== "learning");
+  if (window.linguangAgent) {
+    if (mode === "communication") window.linguangAgent.show();
+    else window.linguangAgent.hide();
+  }
   document.querySelector("#page-title").textContent = modes[mode].title;
   document.querySelector("#page-description").textContent = modes[mode].description;
   document.querySelector("#breadcrumb-current").textContent = modes[mode].title;
@@ -1017,6 +1022,7 @@ loadTerms();
 renderKnowledgeHistory();
 checkModel();
 initializeSpeechOutput();
+initializeAgentPanel({ apiBase: API_BASE });
 let communicationInitialized = false;
 let learningInitialized = false;
 window.linguangNavigate = setMode;
