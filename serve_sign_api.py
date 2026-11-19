@@ -1601,8 +1601,83 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             abort(404)
         return send_from_directory(vendor_root, filename)
 
-    # Agent 探针：只在显式开启时注册，用来验证模型能否自主调用工具。
+    # Agent 工具调用：只在显式开启时注册（AGENT_ENABLED=1），用于灰度验证。
     if os.environ.get("AGENT_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+
+        def _agent_public_item(item):
+            source = _public_knowledge_source(item)
+            return {
+                "title": source.get("title"),
+                "book": source.get("book"),
+                "page": source.get("page"),
+                "text": str(source.get("text") or "")[:600],
+                "images": (source.get("images") or [])[:2],
+            }
+
+        def _agent_lookup(term):
+            repository = store()
+            hits = repository.search_knowledge_keywords(term, limit=3)
+            return {
+                "ok": True,
+                "term": term,
+                "count": len(hits),
+                "items": [_agent_public_item(item) for item in hits[:3]],
+            }
+
+        def _agent_scene(query):
+            repository = store()
+            collected = []
+            seen = set()
+
+            def take(found):
+                for item in found:
+                    key = str(item.get("_id", ""))
+                    if key and key not in seen:
+                        seen.add(key)
+                        collected.append(item)
+
+            take(repository.search_knowledge_exact(query, limit=5))
+            for term in _fallback_knowledge_plan(query).get("search_terms") or []:
+                take(repository.search_knowledge_keywords(term, limit=8))
+            take(repository.search_knowledge_keywords(query, limit=8))
+            # 关键词已经够用就不走向量：向量要逐条请求 embedding，单次约 2 秒。
+            if len(collected) < 6 and _book_external_allowed() and _book_api_key() and knowledge_index_name():
+                try:
+                    if repository.has_knowledge_vector_index(knowledge_index_name()):
+                        for vector in _book_embeddings([query]):
+                            take([
+                                item
+                                for item in repository.search_knowledge_vectors(
+                                    vector, knowledge_index_name(), limit=12
+                                )
+                                if isinstance(item.get("score"), (int, float))
+                                and item["score"] >= min(_book_similarity_min_score(), 0.42)
+                            ])
+                except Exception as exc:
+                    app.logger.error("agent scene vector search failed: %s", type(exc).__name__)
+            items = [_agent_public_item(item) for item in collected[:12]]
+            return {"ok": True, "query": query, "count": len(items), "items": items}
+
+        def _agent_video(term):
+            wanted = str(term or "").strip()
+            if not wanted:
+                return {"ok": False, "error": "term 为空", "count": 0, "items": []}
+            for entry in _load_terms(terms_file, media_dir):
+                names = [str(entry.get("term") or ""), *(entry.get("aliases") or [])]
+                if any(wanted in str(name) or str(name) in wanted for name in names if name):
+                    return {
+                        "ok": True,
+                        "term": entry.get("term"),
+                        "count": 1,
+                        "items": [{
+                            "term": entry.get("term"),
+                            "title": entry.get("term"),
+                            "video_url": entry.get("video_url"),
+                            "text": str(entry.get("sign_description") or entry.get("explanation") or "")[:400],
+                            "aliases": entry.get("aliases") or [],
+                        }],
+                    }
+            return {"ok": True, "term": term, "count": 0, "items": []}
 
         @app.post("/api/agent/probe")
         def agent_probe():
@@ -1616,21 +1691,17 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
 
             import agent_probe as agent_probe_module
 
-            repository = store()
-
-            def search(term: str):
-                try:
-                    hits = repository.search_knowledge_keywords(term, limit=3)
-                except Exception:
-                    return []
-                return [_public_knowledge_source(item) for item in hits]
-
+            executors = {
+                "lookup_term": lambda args: _agent_lookup(str(args.get("term") or "").strip()),
+                "search_scene": lambda args: _agent_scene(str(args.get("query") or "").strip()),
+                "get_sign_video": lambda args: _agent_video(str(args.get("term") or "").strip()),
+            }
             events = agent_probe_module.iter_agent_stream(
                 question=question,
                 api_key=api_key,
                 endpoint=_deepseek_endpoint(),
                 model=os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat"),
-                search=search,
+                executors=executors,
             )
             return Response(
                 stream_with_context(events),

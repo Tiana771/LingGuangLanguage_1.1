@@ -1,15 +1,15 @@
-"""Agent 探针（仅用于验证工具调用链路，默认关闭）。
+"""Agent 工具调用模块（灰度开关 AGENT_ENABLED，默认关闭）。
 
-这个模块只回答一个问题：DeepSeek 能不能按我们给的 schema 真的发起 tool_calls，
-我们能不能把结果回填、再让它据此作答，以及这一圈要花多久。
+职责：把 DeepSeek 的 tool_calls 循环跑通——模型决定调哪个工具、我们执行、
+把结果回填、直到它愿意作答，全过程以 SSE 事件吐出，前端据此画“执行轨迹”。
 
-实现上有意保持最小：一个工具、最多三轮、工具轮用非流式请求（便于拿到完整的
-tool_calls 参数），最后一轮把答案切成小段以 SSE 吐出，形状与前端将来的
-tool_start / tool_result / token / done 事件一致。
+三个工具的分工：
+    lookup_term     查一个具体词条（精确匹配，返回册号页码与原书图）
+    search_scene    按一句话或一个场景找相关词（走向量 + 关键词）
+    get_sign_video  取某个词的示范视频与动作说明
 
-通过环境变量控制：
-    AGENT_ENABLED=1     在 serve_sign_api 里注册 /api/agent/probe
-    AGENT_MAX_ROUNDS=3  最多几轮工具调用
+实现上有意保持克制：工具轮用非流式请求（便于拿到完整参数），最后一轮把答案
+切成小段吐出；答案文字本身仍然由模型生成，但事实必须来自工具返回。
 """
 
 from __future__ import annotations
@@ -26,9 +26,11 @@ REQUEST_TIMEOUT = float(os.environ.get("AGENT_REQUEST_TIMEOUT", "60") or 60)
 
 SYSTEM_PROMPT = (
     "你是“聆光手语”平台里的助手，服务听障用户与健听用户之间的沟通。"
-    "你可以调用工具查询已审核的《国家通用手语词典》。"
-    "需要词条释义、动作做法、册号页码或示范视频时，先调用 lookup_term，不要凭记忆回答。"
-    "工具返回为空时，明确说明词典中没有收录，不要编造。"
+    "你可以调用工具：lookup_term 查一个具体词条，search_scene 按场景或一句话找相关词，"
+    "get_sign_video 取某个词的示范视频。"
+    "只要问题涉及词条释义、动作做法、册号页码或示范视频，就先调用工具，不要凭记忆回答。"
+    "推荐替代说法时只能使用工具返回过的词；没有任何可用结果时，直接说明词典未收录，"
+    "并反问用户是否要查某个具体的词，不要自己编词。"
     "回答用简体中文，不超过 200 字，先给结论再给依据。"
 )
 
@@ -37,7 +39,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "lookup_term",
-            "description": "在已审核的《国家通用手语词典》中查询一个手语词条，返回释义、动作描述、册号页码与原书图片。",
+            "description": "在已审核的《国家通用手语词典》中查询一个手语词条，返回释义、动作描述、册号页码与原书图片。适合确定要查哪个词时使用。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -50,7 +52,43 @@ TOOLS: list[dict[str, Any]] = [
                 "additionalProperties": False,
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_scene",
+            "description": "按一句话或一个场景检索已审核词典，返回一批可能适用的词条。适合“去医院会用到哪些词”“和购物有关的词”这类不确定具体词条的问题。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "场景或一句话，例如：去医院看病、在餐厅点餐。不要只传单个词。",
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sign_video",
+            "description": "取某个词的手语示范视频地址、动作说明与释义。用户问“怎么打”“有没有视频”时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "term": {
+                        "type": "string",
+                        "description": "要取视频的词，例如：你好、谢谢、医院。",
+                    }
+                },
+                "required": ["term"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -84,33 +122,38 @@ def _error_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _run_tool(name: str, arguments: dict[str, Any], search: Callable[[str], list[dict]]) -> dict[str, Any]:
-    if name != "lookup_term":
+Executor = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _run_tool(name: str, arguments: dict[str, Any], executors: dict[str, Executor]) -> dict[str, Any]:
+    executor = executors.get(name)
+    if executor is None:
         return {"ok": False, "error": f"未知工具：{name}"}
-    term = str(arguments.get("term") or "").strip()
-    if not term:
-        return {"ok": False, "error": "term 为空"}
-    items = search(term) or []
-    return {
-        "ok": True,
-        "term": term,
-        "count": len(items),
-        "items": [
-            {
-                "title": item.get("title"),
-                "book": item.get("book"),
-                "page": item.get("page"),
-                "text": str(item.get("text") or "")[:600],
-                "images": (item.get("images") or [])[:2],
-            }
-            for item in items[:3]
-        ],
-    }
+    try:
+        result = executor(arguments)
+    except Exception as exc:  # 工具失败要让模型知道，而不是把整个流打断
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "工具返回格式不正确"}
+    return result
 
 
 def _chunks(text: str, size: int = 28) -> Iterator[str]:
     for index in range(0, len(text), size):
         yield text[index:index + size]
+
+
+def _event_payload(name: str, arguments: dict[str, Any], result: dict[str, Any], took_ms: int) -> dict[str, Any]:
+    items = result.get("items") or []
+    return {
+        "name": name,
+        "argument": arguments.get("term") or arguments.get("query") or "",
+        "count": result.get("count", len(items)),
+        "took_ms": took_ms,
+        "ok": bool(result.get("ok")),
+        "error": result.get("error"),
+        "titles": [item.get("title") or item.get("term") for item in items][:6],
+    }
 
 
 def iter_agent_stream(
@@ -119,7 +162,7 @@ def iter_agent_stream(
     api_key: str,
     endpoint: str,
     model: str,
-    search: Callable[[str], list[dict]],
+    executors: dict[str, Executor],
 ) -> Iterator[str]:
     """跑一次完整的“工具调用 → 回填 → 作答”，以 SSE 文本逐条吐出。"""
 
@@ -153,13 +196,14 @@ def iter_agent_stream(
                                "finish": "error", "elapsed_ms": int((time.time() - started) * 1000)})
             return
 
-        message = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+        choice = (data.get("choices") or [{}])[0] or {}
+        message = choice.get("message") or {}
         calls = message.get("tool_calls") or []
         yield sse("round", {
             "round": rounds,
             "latency_ms": int((time.time() - round_started) * 1000),
             "tool_calls": len(calls),
-            "finish_reason": ((data.get("choices") or [{}])[0] or {}).get("finish_reason"),
+            "finish_reason": choice.get("finish_reason"),
         })
 
         if not calls:
@@ -196,17 +240,9 @@ def iter_agent_stream(
                 arguments = {"_parse_error": str(raw_arguments)[:200]}
 
             tool_started = time.time()
-            result = _run_tool(name, arguments if isinstance(arguments, dict) else {}, search)
+            result = _run_tool(name, arguments if isinstance(arguments, dict) else {}, executors)
             took_ms = int((time.time() - tool_started) * 1000)
-            yield sse("tool_result", {
-                "name": name,
-                "term": result.get("term"),
-                "count": result.get("count", 0),
-                "took_ms": took_ms,
-                "ok": bool(result.get("ok")),
-                "error": result.get("error"),
-                "titles": [item.get("title") for item in result.get("items", [])],
-            })
+            yield sse("tool_result", _event_payload(name, arguments if isinstance(arguments, dict) else {}, result, took_ms))
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.get("id"),
