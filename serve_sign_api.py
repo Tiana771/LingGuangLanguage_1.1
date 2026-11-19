@@ -1601,6 +1601,43 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             abort(404)
         return send_from_directory(vendor_root, filename)
 
+    # Agent 探针：只在显式开启时注册，用来验证模型能否自主调用工具。
+    if os.environ.get("AGENT_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+
+        @app.post("/api/agent/probe")
+        def agent_probe():
+            payload = request.get_json(silent=True) or {}
+            question = str(payload.get("question") or "").strip()[:500]
+            if not question:
+                return _json_error("请提供问题。", 400)
+            api_key = os.environ.get("DEEP_SEEK_API_KEY", "").strip()
+            if not api_key:
+                return _json_error("DeepSeek API 尚未配置，无法运行 Agent 探针。", 503)
+
+            import agent_probe as agent_probe_module
+
+            repository = store()
+
+            def search(term: str):
+                try:
+                    hits = repository.search_knowledge_keywords(term, limit=3)
+                except Exception:
+                    return []
+                return [_public_knowledge_source(item) for item in hits]
+
+            events = agent_probe_module.iter_agent_stream(
+                question=question,
+                api_key=api_key,
+                endpoint=_deepseek_endpoint(),
+                model=os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat"),
+                search=search,
+            )
+            return Response(
+                stream_with_context(events),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
     return app
 
 
