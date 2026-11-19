@@ -1,4 +1,14 @@
 lgsy.huaxuefeng.com {
     encode zstd gzip
+    @private path_regexp private (?i)(^|/)\.|[.](env|py|pyc|pyo|pkl|joblib|sqlite|sqlite3|db|log|pem|key|bak)($|/)
+    respond @private 404
+    log {
+        output file /var/log/caddy/linguang-access.json {
+            roll_size 10MiB
+            roll_keep 7
+            roll_keep_for 168h
+        }
+        format json
+    }
     reverse_proxy 127.0.0.1:5001
 }

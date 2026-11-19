@@ -7,6 +7,7 @@ import secrets
 import unicodedata
 import base64
 import binascii
+import logging
 from pathlib import Path
 from typing import Any
 from datetime import datetime, timedelta, timezone
@@ -16,15 +17,17 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, request, send_from_directory, session, stream_with_context
+from flask import Flask, Response, abort, jsonify, request, send_from_directory, session, stream_with_context
 from flask.sessions import SessionInterface, SessionMixin
 from werkzeug.datastructures import CallbackDict
 import joblib
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from mongo_store import MongoStore, knowledge_collection_name, knowledge_index_name
 from sign_baseline import predict_sequence
 from book_knowledge import MEDIA_DIR
+from model_audit import ModelCallAudit
 
 
 ROOT = Path(__file__).resolve().parent
@@ -35,6 +38,18 @@ DEEPSEEK_MAX_TEXT_CHARS = 12000
 SESSION_USER_KEY = "linguang_user_id"
 SESSION_NAME_KEY = "linguang_username"
 CSRF_SESSION_KEY = "linguang_csrf_token"
+PUBLIC_ROOT_FILES = frozenset({
+    "index.html", "styles.css", "app.js", "auth_client.mjs", "camera_features.mjs",
+    "communication_assistant.mjs", "deepseek_stream.mjs", "learning_client.mjs",
+    "prediction_smoother.mjs", "recognition_session.mjs", "speech_output.mjs",
+    "speech_retry.mjs", "transcript_blocks.mjs", "transcript_segments.mjs",
+    "book_review_report.json",
+})
+PUBLIC_ASSET_FILES = frozenset({
+    "assets/linguang-mark.svg", "assets/willow-canopy.svg",
+    "assets/signing-hands-line.svg", "assets/wind-leaves.svg",
+    "assets/hand_landmarker.task",
+})
 
 
 class MongoBackedSession(CallbackDict, SessionMixin):
@@ -144,9 +159,10 @@ def _history_messages(question: str, sources: list[dict[str, Any]]) -> list[dict
     ]
 
 
-def _iter_history_sse(upstream, repository, owner_id: str, question: str, sources: list[dict[str, Any]]):
+def _iter_history_sse(upstream, repository, owner_id: str, question: str, sources: list[dict[str, Any]], audit=None):
     answer = []
     completed = False
+    outcome = "stream_incomplete"
     try:
         yield _sse_event("sources", {"sources": [{key: value for key, value in item.items() if key != "score"} for item in sources]})
         yield _sse_event("meta", {"message": "正在根据命中记录整理回答…"})
@@ -157,13 +173,17 @@ def _iter_history_sse(upstream, repository, owner_id: str, question: str, source
             data = line[5:].strip()
             if data == "[DONE]":
                 completed = True
+                outcome = "completed"
                 if answer:
                     repository.save_assistant_turn(owner_id, question, "".join(answer), sources)
                 yield _sse_event("done", {})
                 break
             try:
                 payload = json.loads(data)
+                if audit:
+                    audit.observe(payload)
                 if payload.get("error"):
+                    outcome = "upstream_error"
                     yield _sse_event("error", {"message": "历史记录 AI 回答失败，请重试。"})
                     return
                 choices = payload.get("choices") or []
@@ -177,11 +197,17 @@ def _iter_history_sse(upstream, repository, owner_id: str, question: str, source
         if not completed:
             yield _sse_event("error", {"message": "历史记录 AI 流提前结束，结果未完成。"})
     except GeneratorExit:
+        outcome = "cancelled"
         raise
     except Exception:
+        outcome = "stream_error"
         yield _sse_event("error", {"message": "历史记录 AI 响应中断，请重试。"})
     finally:
-        upstream.close()
+        try:
+            upstream.close()
+        finally:
+            if audit:
+                audit.finish(outcome)
 
 
 def _deepseek_endpoint() -> str:
@@ -211,8 +237,9 @@ def _deepseek_messages(action: str, text: str) -> list[dict[str, str]]:
     ]
 
 
-def _iter_deepseek_sse(upstream):
+def _iter_deepseek_sse(upstream, audit=None):
     completed = False
+    outcome = "stream_incomplete"
     try:
         yield _sse_event("meta", {"message": "已连接，等待模型首段内容…"})
         for raw_line in upstream:
@@ -222,11 +249,15 @@ def _iter_deepseek_sse(upstream):
             data = line[5:].strip()
             if data == "[DONE]":
                 completed = True
+                outcome = "completed"
                 yield _sse_event("done", {})
                 break
             try:
                 payload = json.loads(data)
+                if audit:
+                    audit.observe(payload)
                 if payload.get("error"):
+                    outcome = "upstream_error"
                     yield _sse_event("error", {"message": "DeepSeek 生成失败，请重试。"})
                     return
                 choices = payload.get("choices") or []
@@ -239,11 +270,17 @@ def _iter_deepseek_sse(upstream):
         if not completed:
             yield _sse_event("error", {"message": "DeepSeek 流提前结束，结果未完成。"})
     except GeneratorExit:
+        outcome = "cancelled"
         raise
     except Exception:
+        outcome = "stream_error"
         yield _sse_event("error", {"message": "DeepSeek 流式响应中断，请重试。"})
     finally:
-        upstream.close()
+        try:
+            upstream.close()
+        finally:
+            if audit:
+                audit.finish(outcome)
 
 
 def _sse_event(name: str, payload: dict[str, Any]) -> str:
@@ -581,7 +618,11 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
                terms_path: Path | str | None = None, videos_dir: Path | str | None = None,
                config_path: Path | str | None = None, rejection_mode: str | None = None,
                mongo_store: MongoStore | None = None) -> Flask:
-    app = Flask(__name__, static_folder=str(ROOT), static_url_path="")
+    app = Flask(__name__, static_folder=None)
+    # Production Gunicorn is reachable only through the local Caddy proxy.
+    if os.environ.get("LINGUANG_TRUST_PROXY") == "1":
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+    app.logger.setLevel(logging.INFO)
     app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_urlsafe(48)
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
@@ -608,6 +649,8 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
 
     @app.before_request
     def enforce_session_security():
+        if any(part.startswith(".") for part in request.path.split("/") if part):
+            abort(404)
         if request.path.startswith(protected_prefixes) and not session.get(SESSION_USER_KEY):
             return _json_error("请先登录后使用此功能。", 401)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path.startswith(csrf_prefixes):
@@ -651,6 +694,39 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
     @app.get("/")
     def index():
         return send_from_directory(ROOT, "index.html")
+
+    @app.get("/<path:filename>")
+    def public_static(filename):
+        if filename not in PUBLIC_ROOT_FILES and filename not in PUBLIC_ASSET_FILES:
+            abort(404)
+        if not (ROOT / filename).resolve().is_relative_to(ROOT.resolve()):
+            abort(404)
+        return send_from_directory(ROOT, filename)
+
+    def begin_model_call(action, messages, model, max_tokens):
+        return ModelCallAudit(
+            logger=app.logger, action=action, owner_id=session.get(SESSION_USER_KEY),
+            client_ip=request.remote_addr, endpoint=request.path, model=model,
+            messages=messages, max_tokens=max_tokens,
+            log_path=os.environ.get("LINGUANG_MODEL_LOG"),
+            key_label=os.environ.get("DEEP_SEEK_KEY_LABEL"),
+        )
+
+    def model_stream_response(upstream, events, audit):
+        response = Response(
+            stream_with_context(events), mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no",
+                     "Connection": "keep-alive", "X-Request-ID": audit.request_id},
+        )
+
+        def close_upstream():
+            try:
+                upstream.close()
+            finally:
+                audit.finish("cancelled")
+
+        response.call_on_close(close_upstream)
+        return response
 
     @app.get("/api/auth/csrf")
     def auth_csrf():
@@ -1344,12 +1420,15 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             return jsonify({"message": "DeepSeek API 尚未配置，请检查服务端环境变量。"}), 503
 
         model = os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+        messages = _deepseek_messages(action, text)
+        max_tokens = 480 if action == "summarize" else 220
         body = json.dumps({
             "model": model,
-            "messages": _deepseek_messages(action, text),
+            "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "temperature": 0.3,
-            "max_tokens": 480 if action == "summarize" else 220,
+            "max_tokens": max_tokens,
         }, ensure_ascii=False).encode("utf-8")
         upstream_request = Request(
             _deepseek_endpoint(),
@@ -1361,10 +1440,13 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             },
             method="POST",
         )
+        audit = begin_model_call(action, messages, model, max_tokens)
         try:
             upstream = urlopen(upstream_request, timeout=90)
+            audit.upstream_opened(upstream)
         except HTTPError as exc:
             status = exc.code
+            audit.finish("upstream_error", http_status=status, error_type=type(exc).__name__)
             exc.close()
             if status in {401, 403}:
                 message = "DeepSeek API 认证失败，请检查服务端密钥。"
@@ -1373,18 +1455,11 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             else:
                 message = f"DeepSeek API 请求失败（HTTP {status}）。"
             return jsonify({"message": message}), 502
-        except (URLError, TimeoutError, OSError):
+        except (URLError, TimeoutError, OSError) as exc:
+            audit.finish("upstream_error", error_type=type(exc).__name__)
             return jsonify({"message": "无法连接 DeepSeek API，请检查网络后重试。"}), 502
 
-        return Response(
-            stream_with_context(_iter_deepseek_sse(upstream)),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-        )
+        return model_stream_response(upstream, _iter_deepseek_sse(upstream, audit), audit)
 
     @app.get("/api/history/chats")
     def history_chats():
@@ -1428,10 +1503,13 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
         api_key = os.environ.get("DEEP_SEEK_API_KEY", "").strip()
         if not api_key:
             return _json_error("DeepSeek API 尚未配置，请检查服务端环境变量。", 503)
+        model = os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat"
+        messages = _history_messages(question, sources)
         body = json.dumps({
-            "model": os.environ.get("DEEP_SEEK_MODEL", "deepseek-chat").strip() or "deepseek-chat",
-            "messages": _history_messages(question, sources),
+            "model": model,
+            "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "temperature": 0.2,
             "max_tokens": 600,
         }, ensure_ascii=False).encode("utf-8")
@@ -1440,19 +1518,21 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }, method="POST")
+        audit = begin_model_call("history", messages, model, 600)
         try:
             upstream = urlopen(upstream_request, timeout=90)
+            audit.upstream_opened(upstream)
         except HTTPError as exc:
             status = exc.code
+            audit.finish("upstream_error", http_status=status, error_type=type(exc).__name__)
             exc.close()
             message = "DeepSeek API 认证失败，请检查服务端密钥。" if status in {401, 403} else "DeepSeek API 请求失败，请稍后重试。"
             return _json_error(message, 502)
-        except (URLError, TimeoutError, OSError):
+        except (URLError, TimeoutError, OSError) as exc:
+            audit.finish("upstream_error", error_type=type(exc).__name__)
             return _json_error("无法连接 DeepSeek API，请检查网络后重试。", 502)
-        return Response(
-            stream_with_context(_iter_history_sse(upstream, repository, owner_id, question, sources)),
-            mimetype="text/event-stream",
-            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        return model_stream_response(
+            upstream, _iter_history_sse(upstream, repository, owner_id, question, sources, audit), audit,
         )
 
     @app.get("/api/health")
@@ -1513,7 +1593,13 @@ def create_app(model_path: Path | str | None = None, threshold: float | None = N
 
     @app.get("/vendor/mediapipe/<path:filename>")
     def mediapipe_vendor(filename: str):
-        return send_from_directory(ROOT / "node_modules" / "@mediapipe" / "tasks-vision", filename)
+        vendor_root = ROOT / "node_modules" / "@mediapipe" / "tasks-vision"
+        allowed = filename == "vision_bundle.mjs" or (
+            filename.startswith("wasm/") and Path(filename).suffix in {".js", ".wasm"}
+        )
+        if not allowed or not (vendor_root / filename).resolve().is_relative_to(vendor_root.resolve()):
+            abort(404)
+        return send_from_directory(vendor_root, filename)
 
     return app
 

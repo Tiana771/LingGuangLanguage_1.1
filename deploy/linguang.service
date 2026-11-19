@@ -8,12 +8,14 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/linguang/app
-EnvironmentFile=/home/ubuntu/linguang/app/.env
+EnvironmentFile=/etc/linguang/linguang.env
 Environment=BOOK_KNOWLEDGE_COLLECTION=SignKnowledgeChunks_v2
 Environment=BOOK_EMBEDDING_INDEX_NAME=sign_knowledge_vector_v2
 Environment=BOOK_CONTENT_EXTERNAL_ALLOWED=true
 Environment=FLASK_COOKIE_SECURE=true
-ExecStart=/home/ubuntu/linguang/app/.venv/bin/gunicorn --worker-class gthread --workers 2 --threads 4 --timeout 120 --bind 127.0.0.1:5001 serve_sign_api:create_app()
+Environment=LINGUANG_TRUST_PROXY=1
+Environment=LINGUANG_MODEL_LOG=/var/log/linguang/model-usage.jsonl
+ExecStart=/home/ubuntu/linguang/app/.venv/bin/gunicorn --worker-class gthread --workers 2 --threads 4 --timeout 120 --bind 127.0.0.1:5001 --access-logfile - --error-logfile - --capture-output serve_sign_api:create_app()
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
